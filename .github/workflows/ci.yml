@@ -49,6 +49,19 @@ jobs:
           fi
           echo "drift correctly detected (gate exit $code)"
 
+      - name: Subtle drift must still be detected (gate-only suite)
+        run: |
+          python -m tracegate baseline scenarios/gate_only.yaml -o gate_only_baseline.json --verify-kill-rate 0.8 --rollouts 3
+          set +e
+          python -m tracegate gate scenarios/gate_only.yaml -b scenarios/gate_only_buggy.yaml -r gate_only_baseline.json --rollouts 3
+          code=$?
+          set -e
+          if [ "$code" = "0" ]; then
+            echo "::error::subtle quality drift PASSED the gate - overall-drop detection is broken"
+            exit 1
+          fi
+          echo "subtle drift correctly detected (gate exit $code)"
+
       - name: Build score card
         run: |
           {
@@ -62,6 +75,11 @@ jobs:
             echo "**buggy drift vs baseline** (must be detected)"
             echo '```'
             python -m tracegate gate scenarios/example.yaml -b scenarios/behavior_buggy.yaml -r baseline.json --rollouts 3 || true
+            echo '```'
+            echo ""
+            echo "**subtle quality drift vs baseline** (gate-only suite, must be detected)"
+            echo '```'
+            python -m tracegate gate scenarios/gate_only.yaml -b scenarios/gate_only_buggy.yaml -r gate_only_baseline.json --rollouts 3 || true
             echo '```'
             echo ""
             echo "**mutation kill-rate**"

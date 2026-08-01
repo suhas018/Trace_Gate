@@ -142,7 +142,11 @@ runs it on every PR and push:
    baseline.
 4. **Drift must still be detected** — the buggy agent must REGRESS; CI fails if
    it passes, i.e. if an edit silently blinded the gate.
-5. **Score card** — posts/updates a PR comment with the gate output and the
+5. **Subtle drift must still be detected** (`scenarios/gate_only.yaml`) — a
+   gate-layer-only probe: a quality regression with *no* hard violations
+   (redundant tool call), caught solely by the overall-drop comparison. Unit
+   tests do not cover this path; the gate job is its test.
+6. **Score card** — posts/updates a PR comment with the gate output and the
    mutation kill-rate.
 
 Point branch protection at the `test` and `gate` jobs and a regression in the

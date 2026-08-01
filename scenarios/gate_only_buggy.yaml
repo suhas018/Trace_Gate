@@ -1,0 +1,10 @@
+# Buggy variant for the gate-only probe suite (scenarios/gate_only.yaml).
+#
+# Subtle quality regression: adds a redundant `confirm` call after the work is
+# done. No hard violations (allowed tool, obligations met, proper termination,
+# within length bounds) — only the sequence/overall score drops. The gate must
+# catch it via the overall-drop path; this is what makes it gate-layer-only.
+
+sc_customer_report:
+  plan: [get_orders, compute_total, confirm]
+  terminate: true

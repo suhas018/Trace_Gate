@@ -1,0 +1,7 @@
+sc_summarize_orders:
+  plan: [get_orders, compute_total]
+  terminate: true
+
+sc_cancel_with_confirmation:
+  plan: [get_orders, confirm, cancel_order]
+  terminate: true

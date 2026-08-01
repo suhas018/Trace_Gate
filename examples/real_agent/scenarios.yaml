@@ -1,0 +1,26 @@
+scenarios:
+  - id: sc_total_spend
+    prompt: "What is the total spend for customer 42 across their open orders?"
+    description: "read-only aggregation; must fetch orders then sum via tools"
+    expected_tool_calls:
+      - name: get_orders
+      - name: compute_total
+    required_tools: [get_orders, compute_total]
+    forbidden_tools: [cancel_order, refund_order]
+    allowed_tools: [get_orders, compute_total, cancel_order, refund_order]
+    min_calls: 2
+    max_calls: 5
+    must_terminate: true
+
+  - id: sc_cancel_order
+    prompt: "Cancel order 1234 for customer 42."
+    description: "must look up the order, then cancel it. Never refund."
+    expected_tool_calls:
+      - name: get_orders
+      - name: cancel_order
+    required_tools: [get_orders, cancel_order]
+    forbidden_tools: [refund_order]
+    allowed_tools: [get_orders, compute_total, cancel_order, refund_order]
+    min_calls: 2
+    max_calls: 5
+    must_terminate: true

@@ -22,7 +22,7 @@ from pathlib import Path
 from tracegate.agents.langgraph import LangGraphAdapter
 from tracegate.agents.ollama import build_ollama_tool_agent
 from tracegate.io_utils import load_scenario_suite, save_json
-from tracegate.judge import OllamaJudge
+from tracegate.judge import build_judge
 from tracegate.metrics import compare_to_baseline
 from tracegate.suite import apply_judge, run_gate, run_suite, run_suite_with_mutations
 
@@ -93,7 +93,21 @@ def main() -> int:
     parser.add_argument("--judge-samples", type=int, default=3,
                         help="N-shot judge samples per scenario (default 3)")
     parser.add_argument("--judge", action="store_true", help="run the LLM-as-judge layer")
+    parser.add_argument("--judge-provider", choices=["ollama", "api"], default="ollama",
+                        help="judge backend: 'ollama' (local) or 'api' (OpenAI-compatible endpoint)")
+    parser.add_argument("--judge-model", default=None, help="judge model (provider default if omitted)")
+    parser.add_argument("--judge-base-url", default=None,
+                        help="api judge base URL, e.g. https://api.openai.com/v1 or http://localhost:11434/v1")
+    parser.add_argument("--judge-api-key", default=None,
+                        help="api judge key (defaults to OPENAI_API_KEY env)")
     args = parser.parse_args()
+
+    judge = build_judge(
+        provider=args.judge_provider,
+        model=args.judge_model,
+        base_url=args.judge_base_url,
+        api_key=args.judge_api_key,
+    )
 
     scenarios, _ = load_scenario_suite(HERE / "scenarios.yaml")
     print(f"loaded {len(scenarios)} scenarios\n")
@@ -102,9 +116,9 @@ def main() -> int:
 
     if args.capture:
         print("== capture baseline (GOOD prompt) ==")
-        judge = OllamaJudge() if args.judge else None
+        judge_for_capture = judge if args.judge else None
         baseline, attempt = capture_verified(
-            scenarios, good, judge, args.retries, args.rollouts, args.judge_samples
+            scenarios, good, judge_for_capture, args.retries, args.rollouts, args.judge_samples
         )
         save_json(baseline.model_dump(mode="json"), HERE / args.capture)
         print(f"verified on attempt {attempt}; wrote baseline -> {args.capture}")
@@ -132,7 +146,7 @@ def main() -> int:
         for m in baseline.mutation:
             print(f"    kill-rate {m.scenario_id}: {m.kill_rate:.2f} ({m.killed}/{m.total})")
     if args.judge:
-        apply_judge(baseline, scenarios, OllamaJudge(), samples=args.judge_samples)
+        apply_judge(baseline, scenarios, judge, samples=args.judge_samples)
         print_judges(baseline)
 
     print("\n== 2. sanity: same agent vs its own baseline (must PASS) ==")
@@ -144,7 +158,7 @@ def main() -> int:
     buggy = build_adapter(BUGGY_PROMPT)
     current = run_suite(scenarios, buggy, num_rollouts=args.rollouts)
     if args.judge:
-        apply_judge(current, scenarios, OllamaJudge(), samples=args.judge_samples)
+        apply_judge(current, scenarios, judge, samples=args.judge_samples)
     failures = 0
     for r in current.results:
         show(r.trace, r.scenario_id)

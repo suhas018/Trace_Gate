@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from tracegate.judge import OpenAICompatibleJudge
+from tracegate.judge import OpenAICompatibleJudge, build_judge
 from tracegate.schema import Scenario, ToolCall, Trajectory
 
 
@@ -159,3 +159,31 @@ def test_judge_parses_10_point_scale():
         result = judge.judge(scenario(), trace())
     assert result.score == pytest.approx(0.8)
     assert result.label == "SATISFIED"
+
+
+def test_build_judge_api_provider():
+    judge = build_judge("api", model="m", base_url="http://x/v1", api_key="k")
+    assert isinstance(judge, OpenAICompatibleJudge)
+    assert judge.model_name == "m"
+    assert judge.base_url == "http://x/v1"
+    assert judge.api_key == "k"
+
+
+def test_build_judge_openai_alias():
+    judge = build_judge("openai", base_url="http://x/v1")
+    assert isinstance(judge, OpenAICompatibleJudge)
+
+
+def test_build_judge_ollama():
+    from tracegate.judge import OllamaJudge
+
+    try:
+        judge = build_judge("ollama")
+    except ImportError:  # langchain-ollama not installed in CI
+        pytest.skip("langchain-ollama not installed")
+    assert isinstance(judge, OllamaJudge)
+
+
+def test_build_judge_unknown_provider():
+    with pytest.raises(ValueError):
+        build_judge("anthropic")

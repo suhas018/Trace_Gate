@@ -278,12 +278,43 @@ class OpenAICompatibleJudge:
         )
 
 
+def build_judge(
+    provider: str = "ollama",
+    model: str | None = None,
+    base_url: str | None = None,
+    api_key: str | None = None,
+    temperature: float = 0.0,
+) -> LLMJudge:
+    """Factory for the built-in judge backends.
+
+    ``ollama`` : local model via langchain-ollama (the demo default).
+    ``api``    : any OpenAI-compatible ``/chat/completions`` endpoint via the
+                 stdlib-only :class:`OpenAICompatibleJudge`.
+
+    The two backends are interchangeable behind the ``LLMJudge`` seam.
+    """
+    p = provider.lower()
+    if p == "ollama":
+        return OllamaJudge(model=model or "llama3.1:8b", temperature=temperature)
+    if p in ("api", "openai"):
+        return OpenAICompatibleJudge(
+            model=model or "gpt-4o-mini",
+            base_url=base_url or "https://api.openai.com/v1",
+            api_key=api_key,
+            temperature=temperature,
+        )
+    raise ValueError(
+        f"unknown judge provider {provider!r}; expected 'ollama' or 'api'"
+    )
+
+
 __all__ = [
     "JudgeResult",
     "LLMJudge",
     "OllamaJudge",
     "OpenAICompatibleJudge",
     "SampledJudgeResult",
+    "build_judge",
     "build_judge_prompt",
     "label_for",
     "parse_judge_response",

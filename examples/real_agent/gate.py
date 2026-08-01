@@ -26,7 +26,7 @@ from pathlib import Path
 from tracegate.agents.langgraph import LangGraphAdapter
 from tracegate.agents.ollama import build_ollama_tool_agent
 from tracegate.io_utils import load_json, load_scenario_suite
-from tracegate.judge import OllamaJudge
+from tracegate.judge import build_judge
 from tracegate.suite import SuiteReport, apply_judge, run_gate, run_suite
 
 from prompts import BUGGY_PROMPT
@@ -44,7 +44,21 @@ def main() -> int:
     parser.add_argument("--judge-samples", type=int, default=3, help="N-shot judge samples")
     parser.add_argument("--judge-min-score", type=float, default=None,
                         help="if set, fail scenarios whose judge mean is below this (opt-in)")
+    parser.add_argument("--judge-provider", choices=["ollama", "api"], default="ollama",
+                        help="judge backend: 'ollama' (local) or 'api' (OpenAI-compatible endpoint)")
+    parser.add_argument("--judge-model", default=None, help="judge model (provider default if omitted)")
+    parser.add_argument("--judge-base-url", default=None,
+                        help="api judge base URL, e.g. https://api.openai.com/v1 or http://localhost:11434/v1")
+    parser.add_argument("--judge-api-key", default=None,
+                        help="api judge key (defaults to OPENAI_API_KEY env)")
     args = parser.parse_args()
+
+    judge = build_judge(
+        provider=args.judge_provider,
+        model=args.judge_model,
+        base_url=args.judge_base_url,
+        api_key=args.judge_api_key,
+    )
 
     baseline = SuiteReport.model_validate(load_json(HERE / args.reference))
     scenarios, _ = load_scenario_suite(HERE / "scenarios.yaml")
@@ -54,7 +68,7 @@ def main() -> int:
     judge_scores = None
     if args.judge_min_score is not None:
         current_report = run_suite(scenarios, current, num_rollouts=args.rollouts)
-        apply_judge(current_report, scenarios, OllamaJudge(), samples=args.judge_samples)
+        apply_judge(current_report, scenarios, judge, samples=args.judge_samples)
         judge_scores = {j.scenario_id: j for j in current_report.judges}
 
     report = run_gate(

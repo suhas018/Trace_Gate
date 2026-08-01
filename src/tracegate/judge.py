@@ -15,7 +15,9 @@ Design rules:
 from __future__ import annotations
 
 import json
+import os
 import re
+import urllib.request
 from typing import Protocol
 
 from pydantic import BaseModel, Field
@@ -198,10 +200,89 @@ class OllamaJudge:
         )
 
 
+class OpenAICompatibleJudge:
+    """Judge that calls any OpenAI-compatible ``/chat/completions`` endpoint.
+
+    Pure-stdlib HTTP client (``urllib``) — no SDK dependency, so it works from
+    the core install with OpenAI, Groq, Together, vLLM, LM Studio, or Ollama's
+    OpenAI-compat endpoint. The judge layer is provider-neutral by construction:
+    swap ``OllamaJudge`` for ``OpenAICompatibleJudge`` and nothing else changes.
+
+    Fail-closed: network/auth/parse errors degrade to UNAVAILABLE, never crash.
+    """
+
+    def __init__(
+        self,
+        model: str = "gpt-4o-mini",
+        api_key: str | None = None,
+        base_url: str = "https://api.openai.com/v1",
+        temperature: float = 0.0,
+        max_tokens: int = 256,
+        seed: int | None = None,
+        timeout: float = 30.0,
+    ):
+        self.model_name = model
+        self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
+        self.base_url = base_url.rstrip("/")
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        self.seed = seed
+        self.timeout = timeout
+
+    def _payload(self, scenario: Scenario, trace: Trajectory) -> dict:
+        payload: dict = {
+            "model": self.model_name,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are a rigorous evaluator of AI agent goal satisfaction.",
+                },
+                {"role": "user", "content": build_judge_prompt(scenario, trace)},
+            ],
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+        }
+        if self.seed is not None:  # omit for providers that reject the param
+            payload["seed"] = self.seed
+        return payload
+
+    def _call(self, payload: dict) -> str:
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        req = urllib.request.Request(
+            f"{self.base_url}/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            body = resp.read().decode("utf-8")
+        obj = json.loads(body)
+        return obj["choices"][0]["message"]["content"]
+
+    def judge(self, scenario: Scenario, trace: Trajectory) -> JudgeResult:
+        try:
+            content = self._call(self._payload(scenario, trace))
+        except Exception:  # noqa: BLE001 - degrade, never crash the run
+            return JudgeResult(
+                scenario_id=scenario.id, label="UNAVAILABLE", judge_model=self.model_name
+            )
+        score, rationale = parse_judge_response(content)
+        return JudgeResult(
+            scenario_id=scenario.id,
+            score=score,
+            label=label_for(score),
+            rationale=rationale,
+            judge_model=self.model_name,
+        )
+
+
 __all__ = [
     "JudgeResult",
     "LLMJudge",
     "OllamaJudge",
+    "OpenAICompatibleJudge",
     "SampledJudgeResult",
     "build_judge_prompt",
     "label_for",

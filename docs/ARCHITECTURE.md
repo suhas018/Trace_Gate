@@ -158,12 +158,16 @@ session and `0.80` in another on the same trajectory. The judge therefore:
 Rationales are retained (one per sample) for audit, which is the property that
 makes a noisy judge reviewable rather than mystical.
 
+The judge is provider-neutral. `OllamaJudge` (local, `langchain-ollama`) and
+`OpenAICompatibleJudge` (any OpenAI-compatible `/chat/completions` endpoint,
+pure `urllib`, no dependency) implement the same `LLMJudge` seam — swap one for
+the other without touching prompt, parse, sampling, or gating. This keeps the
+judge layer portable across local, cloud, and self-hosted models.
+
 ## 9. Findings from the real-agent build
 
 These are the concrete failures the demo agent surfaced, each of which
-changed the design:
-
-1. **Nondeterminism at temperature 0.** No seed pinning made trajectory output
+changed the design:1. **Nondeterminism at temperature 0.** No seed pinning made trajectory output
    reproducible; the fix is multi-rollout gating (Section 7), not seed worship.
 2. **Runaway generation.** A tool-loop produced an 8K-token non-terminating
    run. Fixed in the agent with `num_predict` caps; the harness enforces the

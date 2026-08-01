@@ -149,8 +149,9 @@ runs it on every PR and push:
 6. **Score card** — posts/updates a PR comment with the gate output and the
    mutation kill-rate.
 
-Point branch protection at the `test` and `gate` jobs and a regression in the
-agent, the scenarios, or the harness itself blocks the merge.
+Branch protection is enabled on `main` (required checks: `test` and `gate`,
+strict), so a regression in the agent, the scenarios, or the harness itself is
+unmergeable.
 
 ## Real-agent demo (LangGraph + Ollama)
 

@@ -101,6 +101,25 @@ single judge call is unreliable (a refusal was scored 0.00 in one session and
 - **fail-closed** — a judge that errors yields `UNAVAILABLE`, which is a
   regression, never a silent pass.
 
+Two judge implementations ship, both behind the same `LLMJudge` seam:
+
+- `OllamaJudge` — local models via `langchain-ollama` (the demo's default).
+- `OpenAICompatibleJudge` — any OpenAI-compatible `/chat/completions` endpoint
+  (OpenAI, Groq, Together, vLLM, LM Studio, or Ollama's own `/v1`). Pure
+  stdlib `urllib`, so it needs **no extra dependency**:
+
+  ```python
+  from tracegate.judge import OpenAICompatibleJudge
+
+  judge = OpenAICompatibleJudge(
+      model="gpt-4o-mini",
+      base_url="https://api.openai.com/v1",   # or http://localhost:11434/v1 (Ollama)
+  )
+  ```
+
+  Swap `OllamaJudge` for `OpenAICompatibleJudge` and nothing else changes — the
+  judge layer is provider-neutral by construction.
+
 ## Install
 
 ```

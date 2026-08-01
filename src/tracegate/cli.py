@@ -103,17 +103,54 @@ def cmd_run(args) -> int:
     return 0
 
 
+def _capture_verified(scenarios, agent, args, out: str) -> int:
+    """Verify-before-write: roll the baseline until it is trustworthy.
+
+    A baseline is only written once (a) no scenario produced hard violations
+    and (b) the mutation kill-rate is at least ``--verify-kill-rate``. Weak
+    baselines are refused, not persisted — the CI equivalent of the demo's
+    capture loop.
+    """
+    last_kill = 0.0
+    for attempt in range(1, args.retries + 1):
+        report = run_suite_with_mutations(
+            scenarios, agent, run_id=args.run_id, seed=args.seed, num_rollouts=args.rollouts
+        )
+        bad = [r for r in report.results if r.scores.hard_violations]
+        kill = report.summary.get("mean_kill_rate", 0.0)
+        last_kill = kill
+        if not bad and kill >= args.verify_kill_rate:
+            save_json(report.model_dump(mode="json"), out)
+            print(f"verified on attempt {attempt}; wrote baseline -> {out}")
+            print(
+                f"mean overall={report.summary['mean_overall']:.4f} "
+                f"kill-rate={kill:.2f} (rollouts={args.rollouts})"
+            )
+            _print_report(report)
+            return 0
+        print(
+            f"  attempt {attempt}: {len(bad)} violation(s), kill-rate={kill:.2f} -> re-rolling",
+            file=sys.stderr,
+        )
+    raise RuntimeError(
+        f"could not capture a verified baseline in {args.retries} attempts "
+        f"(last kill-rate {last_kill:.2f}, required {args.verify_kill_rate:.2f})"
+    )
+
+
 def cmd_baseline(args) -> int:
     scenarios, registry = load_scenario_suite(args.suite)
     behaviors = load_behavior_config(args.behavior)
+    out = args.out or "baseline.json"
+    if args.verify_kill_rate is not None:
+        agent = _build_agent(registry, behaviors, args.behavior is not None)
+        return _capture_verified(scenarios, agent, args, out)
     report = _run_report(
         scenarios, registry, behaviors, args.behavior, args.mutation, args.seed, args.run_id,
         args.rollouts,
     )
-    if not args.out:
-        args.out = "baseline.json"
-    save_json(report.model_dump(mode="json"), args.out)
-    print(f"baseline written to {args.out}")
+    save_json(report.model_dump(mode="json"), out)
+    print(f"baseline written to {out}")
     _print_report(report)
     return 0
 
@@ -173,6 +210,11 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--mutation", action="store_true", help="include mutation kill-rate")
         p.add_argument("--rollouts", type=int, default=1,
                        help="samples per scenario; gate on the worst (default 1)")
+        p.add_argument("--verify-kill-rate", type=float, default=None,
+                       help="baseline: verify-before-write; re-roll until kill-rate >= this "
+                            "and no hard violations, else fail")
+        p.add_argument("--retries", type=int, default=3,
+                       help="baseline: max verify attempts (default 3)")
         p.add_argument("-r", "--reference", default=None, help="baseline JSON (gate)")
         p.add_argument("--delta", type=float, default=1e-9, help="regression tolerance (gate)")
         p.set_defaults(fn=fn)

@@ -129,6 +129,25 @@ tracegate mutate scenarios/example.yaml
 `tracegate run` runs a single scenario without a baseline. Add `--rollouts 5`
 anywhere to control sampling.
 
+## CI / merge gate
+
+The gate is an exit code, so it blocks merges in CI. `.github/workflows/ci.yml`
+runs it on every PR and push:
+
+1. **Unit tests** (`pytest`).
+2. **Verify-before-write baseline** — rebuilds the baseline with
+   `--verify-kill-rate 0.8`; CI fails if the harness can no longer produce a
+   trustworthy (kill-rate ≥ 0.8, no hard violations) baseline.
+3. **Known-good must PASS** — the reference agent must still clear its own
+   baseline.
+4. **Drift must still be detected** — the buggy agent must REGRESS; CI fails if
+   it passes, i.e. if an edit silently blinded the gate.
+5. **Score card** — posts/updates a PR comment with the gate output and the
+   mutation kill-rate.
+
+Point branch protection at the `test` and `gate` jobs and a regression in the
+agent, the scenarios, or the harness itself blocks the merge.
+
 ## Real-agent demo (LangGraph + Ollama)
 
 `examples/real_agent/` is a fully working agent (order-management tools) built

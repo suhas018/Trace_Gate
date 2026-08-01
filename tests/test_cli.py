@@ -58,3 +58,27 @@ def test_run_command_no_behavior_derives_plan():
     assert res.returncode == 0, res.stderr
     assert "mean=" in res.stdout
     assert "sc_summarize_orders" in res.stdout
+
+
+def test_baseline_verify_kill_rate_writes_verified(tmp_path):
+    out = tmp_path / "baseline.json"
+    res = run_cli(
+        "baseline", str(SUITE), "-b", str(GOOD), "-o", str(out),
+        "--verify-kill-rate", "0.8",
+    )
+    assert res.returncode == 0, res.stderr
+    assert "verified on attempt" in res.stdout
+    assert out.exists()
+    data = json.loads(out.read_text())
+    assert data["summary"]["mean_kill_rate"] >= 0.8
+
+
+def test_baseline_verify_kill_rate_refuses_weak_suite(tmp_path):
+    out = tmp_path / "baseline.json"
+    res = run_cli(
+        "baseline", str(SUITE), "-b", str(GOOD), "-o", str(out),
+        "--verify-kill-rate", "99.0",
+    )
+    assert res.returncode == 2
+    assert "could not capture a verified baseline" in res.stderr
+    assert not out.exists()

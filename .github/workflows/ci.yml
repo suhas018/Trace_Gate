@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+  pull-requests: write # comment the gate score card on PRs
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -26,7 +30,65 @@ jobs:
         with:
           python-version: "3.11"
       - run: python -m pip install -e ".[dev]"
-      - name: Capture baseline
-        run: python -m tracegate.cli baseline scenarios/example.yaml -o baseline.json
-      - name: Verify known-good agent passes the gate
-        run: python -m tracegate.cli gate scenarios/example.yaml -b scenarios/behavior_good.yaml -r baseline.json
+
+      - name: Rebuild baseline (verify-before-write)
+        run: python -m tracegate baseline scenarios/example.yaml -b scenarios/behavior_good.yaml -o baseline.json --verify-kill-rate 0.8 --rollouts 3
+
+      - name: Known-good agent must PASS the gate
+        run: python -m tracegate gate scenarios/example.yaml -b scenarios/behavior_good.yaml -r baseline.json --rollouts 3
+
+      - name: Drift must still be detected (gate not blinded)
+        run: |
+          set +e
+          python -m tracegate gate scenarios/example.yaml -b scenarios/behavior_buggy.yaml -r baseline.json --rollouts 3
+          code=$?
+          set -e
+          if [ "$code" = "0" ]; then
+            echo "::error::buggy behavior PASSED the gate - drift is no longer detected"
+            exit 1
+          fi
+          echo "drift correctly detected (gate exit $code)"
+
+      - name: Build score card
+        run: |
+          {
+            echo "### tracegate gate"
+            echo ""
+            echo "**known-good vs baseline** (must pass)"
+            echo '```'
+            python -m tracegate gate scenarios/example.yaml -b scenarios/behavior_good.yaml -r baseline.json --rollouts 3
+            echo '```'
+            echo ""
+            echo "**buggy drift vs baseline** (must be detected)"
+            echo '```'
+            python -m tracegate gate scenarios/example.yaml -b scenarios/behavior_buggy.yaml -r baseline.json --rollouts 3 || true
+            echo '```'
+            echo ""
+            echo "**mutation kill-rate**"
+            echo '```'
+            python -m tracegate mutate scenarios/example.yaml -b scenarios/behavior_good.yaml --rollouts 3
+            echo '```'
+          } > gate-report.md
+
+      - name: Comment score card on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('gate-report.md', 'utf8');
+            const { owner, repo } = context.repo;
+            const marker = '### tracegate gate';
+            const { data: comments } = await github.rest.issues.listComments({
+              owner, repo, issue_number: context.issue.number,
+            });
+            const bot = comments.find((c) => c.body && c.body.includes(marker));
+            if (bot) {
+              await github.rest.issues.updateComment({
+                owner, repo, comment_id: bot.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: context.issue.number, body,
+              });
+            }

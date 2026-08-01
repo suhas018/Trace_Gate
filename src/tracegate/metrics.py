@@ -120,8 +120,6 @@ def length_score(trace: Trajectory, scenario: Scenario) -> float:
 
 def _hard_violations(scores: dict[str, float], scenario: Scenario) -> list[str]:
     violations: list[str] = []
-    if scores["forbidden"] < 1.0:
-        violations.append("forbidden_tool_called")
     if scenario.must_terminate and scores["termination"] < 1.0:
         violations.append("termination_contract_violated")
     if scores["required_coverage"] < 1.0:

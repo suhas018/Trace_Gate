@@ -4,6 +4,28 @@ Quick reference for what was done and when.
 
 ---
 
+## September 2026
+
+### 2026-09-08
+
+| Commit | Description |
+|--------|-------------|
+| `pending` | **P0 hardening** — 9 correctness fixes (see below) + roadmap rebuild after full audit |
+
+**P0 — Correctness & Hardening (audit 2026-09-08):**
+- Docs ↔ code: `overall` is weighted avg (weights 1.0/1.0/2.0/1.5/0.5) — fixed `README.md:53`, `docs/ARCHITECTURE.md:67`, `docs/blog.md:67` (was *product*)
+- `ComponentScores` + `SuiteReport` typing: `field()` → `Field(default_factory=…)` (`metrics.py:196`, `suite.py:30`)
+- Atomic writes: `save_json` tmp+rename (`io_utils.py:85`), no half-written baselines
+- Schema versioning: `SCHEMA_VERSION=1.0` (`schema.py:3`), `SuiteReport.schema_version` with default (old baselines still load)
+- Per-scenario error isolation: `suite.py:56` `_error_result`, suite no longer crashes on one agent exception; `agent_error` hard violation
+- Dedup + registry validation: duplicate `id` error + unknown tool refs error (`io_utils.py:51`, `65`)
+- Single-source `__version__` via `importlib.metadata` (`__init__.py:13`)
+- `LangGraphAdapter` now populates `arguments` via `tool_call_id` correlation (`agents/langgraph.py:39`), handles dict/object messages, result normalization
+- `agents/ollama.py` lazy import + `recursion_limit` now stashed on graph and passed to `invoke` via config
+- Roadmap rebuilt (ROADMAP.md gitignored) — P0-P5 reprioritized; all 80 tests still passing; gate probes (example + gate_only) verified
+
+---
+
 ## August 2026
 
 ### 2026-08-01 (continued)

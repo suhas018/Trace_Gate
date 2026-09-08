@@ -48,15 +48,32 @@ def load_scenario_suite(path: str | Path) -> tuple[list[Scenario], ToolRegistry 
     if not isinstance(raw_scenarios, list) or not raw_scenarios:
         raise TraceGateError(f"{path}: no 'scenarios' list found")
     scenarios: list[Scenario] = []
+    seen_ids: set[str] = set()
     for idx, item in enumerate(raw_scenarios):
         if not isinstance(item, dict):
             raise TraceGateError(f"{path}: scenario #{idx} is not a mapping")
         if "id" not in item:
             raise TraceGateError(f"{path}: scenario #{idx} is missing an 'id'")
+        sid = item["id"]
+        if sid in seen_ids:
+            raise TraceGateError(f"{path}: duplicate scenario id {sid!r}")
+        seen_ids.add(sid)
         try:
             scenarios.append(Scenario.model_validate(item))
         except ValidationError as exc:
             raise TraceGateError(f"{path}: scenario {item.get('id', idx)!r} invalid: {exc}") from exc
+    # Optional cross-check: scenario tool references should exist in registry when provided
+    if registry is not None:
+        reg_names = registry.names
+        for sc in scenarios:
+            referenced = set(sc.required_tools) | set(sc.forbidden_tools) | {e.name for e in sc.expected_tool_calls}
+            if sc.allowed_tools is not None:
+                referenced |= set(sc.allowed_tools)
+            unknown = referenced - reg_names
+            if unknown:
+                raise TraceGateError(
+                    f"{path}: scenario {sc.id!r} references tools not in registry: {sorted(unknown)}"
+                )
     return scenarios, registry
 
 
@@ -85,8 +102,12 @@ def load_behavior_config(path: str | Path | None) -> dict[str, AgentBehavior]:
 def save_json(obj, path: str | Path) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    with p.open("w", encoding="utf-8") as fh:
+    # Atomic write: write to temp file then rename. Prevents half-written
+    # baseline.json on crash / power loss (P0 hardening).
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as fh:
         json.dump(obj, fh, indent=2, default=str)
+    tmp.replace(p)
 
 
 def load_json(path: str | Path):

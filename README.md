@@ -50,8 +50,11 @@ itself, and that is handled explicitly with multi-rollout gating (see below).
 | `termination` | never stopped, or stopped before obligations were met | 0/1 | yes |
 | `length` | suspiciously few or many calls | 0/1 | — |
 
-Hard violations fail a scenario outright. `overall` is the product of the
-non-hard components after hard violations are applied. `compare_to_baseline`
+Hard violations fail a scenario outright. `overall` is the weighted average of
+all components (`sequence` 1.0, `required_coverage` 1.0, `forbidden` 2.0,
+`termination` 1.5, `length` 0.5 — see `DEFAULT_WEIGHTS`). Hard violations
+still gate directly; `overall` provides the soft drift signal within
+tolerance. `compare_to_baseline`
 turns old-score vs. new-score into a verdict with tolerance (`--delta`):
 
 - **REGRESSION** — a hard violation appeared, or a component dropped below the

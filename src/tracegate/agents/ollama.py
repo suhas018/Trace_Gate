@@ -10,11 +10,10 @@ pulled Ollama model.
 
 from __future__ import annotations
 
-from typing import Callable
+from typing import TYPE_CHECKING, Any, Callable
 
-from langchain_core.messages import SystemMessage
-from langchain_core.tools import BaseTool
-from langchain_ollama import ChatOllama
+if TYPE_CHECKING:  # pragma: no cover
+    from langchain_core.tools import BaseTool
 
 DEFAULT_SYSTEM_PROMPT = (
     "You are a careful customer-support agent. "
@@ -25,7 +24,7 @@ DEFAULT_SYSTEM_PROMPT = (
 
 
 def build_ollama_tool_agent(
-    tools: list[BaseTool],
+    tools: list["BaseTool"],
     model: str = "llama3.1:8b",
     system_prompt: str = DEFAULT_SYSTEM_PROMPT,
     temperature: float = 0.0,
@@ -45,10 +44,14 @@ def build_ollama_tool_agent(
     untrustworthy.
     """
     try:
+        from langchain_core.messages import SystemMessage
+        from langchain_ollama import ChatOllama
         from langgraph.graph import END, MessagesState, START, StateGraph
         from langgraph.prebuilt import ToolNode
     except ImportError as exc:  # pragma: no cover
-        raise ImportError("install langgraph: pip install tracegate[langgraph]") from exc
+        raise ImportError(
+            "install tracegate[ollama]: pip install tracegate[ollama]"
+        ) from exc
 
     llm = ChatOllama(
         model=model,
@@ -57,10 +60,10 @@ def build_ollama_tool_agent(
         seed=seed,
     ).bind_tools(tools)
 
-    def call_model(state):
+    def call_model(state: dict[str, Any]) -> dict[str, Any]:
         return {"messages": [llm.invoke([SystemMessage(content=system_prompt)] + state["messages"])]}
 
-    def should_continue(state):
+    def should_continue(state: dict[str, Any]) -> str:
         last = state["messages"][-1]
         return "tools" if getattr(last, "tool_calls", None) else END
 
@@ -70,7 +73,13 @@ def build_ollama_tool_agent(
     graph.add_edge(START, "model")
     graph.add_conditional_edges("model", should_continue, {"tools": "tools", END: END})
     graph.add_edge("tools", "model")
-    return graph.compile()
+    compiled = graph.compile()
+    # Stash recursion_limit so LangGraphAdapter can pass it to invoke (P0: dead param fix)
+    try:
+        setattr(compiled, "_tracegate_recursion_limit", recursion_limit)  # type: ignore[attr-defined]
+    except Exception:
+        pass
+    return compiled
 
 
 __all__ = ["DEFAULT_SYSTEM_PROMPT", "build_ollama_tool_agent"]

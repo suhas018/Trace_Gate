@@ -41,7 +41,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal, Protocol, runtime_checkable
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from tracegate.schema import Scenario, Trajectory
 
@@ -194,8 +194,8 @@ class ComponentScores(BaseModel):
     termination: float
     length: float
     overall: float
-    weights: dict[str, float] = field(default_factory=dict)  # type: ignore[assignment]
-    hard_violations: list[str] = field(default_factory=list)  # type: ignore[assignment]
+    weights: dict[str, float] = Field(default_factory=dict)
+    hard_violations: list[str] = Field(default_factory=list)
 
 
 @dataclass(frozen=True)

@@ -9,14 +9,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from tracegate.agent import AgentAdapter
 from tracegate.judge import LLMJudge, SampledJudgeResult, sample_judge
 from tracegate.metrics import ComponentScores, GateDecision, compare_to_baseline
 from tracegate.mutation import MutationSuiteResult, run_mutation_suite
 from tracegate.runner import RunResult, run_scenario
-from tracegate.schema import Scenario, Trajectory
+from tracegate.schema import SCHEMA_VERSION, Scenario, Trajectory
 
 
 class SuiteReport(BaseModel):
@@ -27,12 +27,13 @@ class SuiteReport(BaseModel):
     rollout's scores so the spread is visible.
     """
 
+    schema_version: str = Field(default=SCHEMA_VERSION, description="Schema version for baseline compatibility checks")
     run_id: str = ""
-    results: list[RunResult] = field(default_factory=list)  # type: ignore[assignment]
-    mutation: list[MutationSuiteResult] = field(default_factory=list)
-    judges: list[SampledJudgeResult] = field(default_factory=list)
-    rollouts: dict[str, list[ComponentScores]] = field(default_factory=dict)
-    summary: dict[str, float] = field(default_factory=dict)
+    results: list[RunResult] = Field(default_factory=list)
+    mutation: list[MutationSuiteResult] = Field(default_factory=list)
+    judges: list[SampledJudgeResult] = Field(default_factory=list)
+    rollouts: dict[str, list[ComponentScores]] = Field(default_factory=dict)
+    summary: dict[str, float] = Field(default_factory=dict)
 
     def scores_for(self, scenario_id: str) -> ComponentScores | None:
         for r in self.results:
@@ -52,6 +53,24 @@ def _worst(runs: list[RunResult]) -> RunResult:
     return min(runs, key=lambda r: (r.scores.overall, -len(r.scores.hard_violations)))
 
 
+def _error_result(scenario: Scenario, exc: Exception, weights: dict[str, float] | None = None) -> RunResult:
+    """Create a failing RunResult when an agent crashes on a scenario."""
+    # Synthetic trace that will score 0 and carry hard violations
+    trace = Trajectory(
+        scenario_id=scenario.id,
+        calls=[],
+        terminated=False,
+        final_answer=f"agent_error: {type(exc).__name__}: {exc}",
+    )
+    from tracegate.metrics import score_trace as _score
+
+    scores = _score(trace, scenario, weights=weights)
+    # Ensure at least one hard violation so gate fails deterministically
+    if "agent_error" not in scores.hard_violations:
+        scores.hard_violations.append("agent_error")
+    return RunResult(scenario_id=scenario.id, trace=trace, scores=scores)
+
+
 def run_suite(
     scenarios: list[Scenario],
     agent: AgentAdapter,
@@ -65,11 +84,20 @@ def run_suite(
     and the *worst* trajectory is kept as the gating representative. This makes
     the gate robust to stochastic agents: a single bad roll (llama3.1 at
     temperature 0 still varies) can no longer hide behind one lucky sample.
+
+    Agent exceptions are isolated per-scenario (P0 hardening): a crash on one
+    scenario produces a synthetic failing RunResult instead of aborting the
+    whole suite.
     """
     results: list[RunResult] = []
     rollouts: dict[str, list[ComponentScores]] = {}
     for scenario in scenarios:
-        runs = [run_scenario(scenario, agent, weights=weights) for _ in range(max(1, num_rollouts))]
+        runs: list[RunResult] = []
+        for _ in range(max(1, num_rollouts)):
+            try:
+                runs.append(run_scenario(scenario, agent, weights=weights))
+            except Exception as exc:  # noqa: BLE001 — isolate per-scenario
+                runs.append(_error_result(scenario, exc, weights=weights))
         rollouts[scenario.id] = [r.scores for r in runs]
         results.append(_worst(runs))
     overalls = [r.scores.overall for r in results]

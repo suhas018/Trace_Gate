@@ -14,6 +14,9 @@ from typing import Any
 from pydantic import BaseModel, Field, model_validator
 
 
+SCHEMA_VERSION = "1.0"
+
+
 class TraceGateError(Exception):
     """Raised when a scenario or trace violates structural invariants."""
 

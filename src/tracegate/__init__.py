@@ -30,4 +30,9 @@ __all__ = [
     "run_scenario",
 ]
 
-__version__ = "0.1.0"
+try:
+    from importlib.metadata import version as _pkg_version
+
+    __version__ = _pkg_version("tracegate")
+except Exception:  # pragma: no cover — fallback for editable installs without metadata
+    __version__ = "0.1.0"

@@ -1,6 +1,11 @@
 import pytest
 
-from tracegate.metrics import score_trace
+from tracegate.metrics import (
+    MetricPlugin,
+    MetricRegistry,
+    registry,
+    score_trace,
+)
 from tracegate.schema import Scenario, ToolCall, Trajectory
 
 
@@ -99,3 +104,206 @@ def test_unknown_weight_component_raises():
     tr = make_trace(["a", "b"])
     with pytest.raises(ValueError):
         score_trace(tr, sc, weights={"not_a_metric": 1.0})
+
+
+# ---- Custom Metric Plugin Tests ----
+
+
+class SimpleMetric:
+    """A simple custom metric for testing."""
+
+    @property
+    def name(self) -> str:
+        return "simple_ratio"
+
+    @property
+    def default_weight(self) -> float:
+        return 1.0
+
+    @property
+    def is_hard_violation(self) -> bool:
+        return False
+
+    def score(self, trace: Trajectory, scenario: Scenario) -> float:
+        # Simple metric: 1.0 if any calls, 0.0 otherwise
+        return 1.0 if len(trace.calls) > 0 else 0.0
+
+
+class HardViolationMetric:
+    """A custom metric that can trigger hard violations."""
+
+    @property
+    def name(self) -> str:
+        return "must_have_result"
+
+    @property
+    def default_weight(self) -> float:
+        return 1.0
+
+    @property
+    def is_hard_violation(self) -> bool:
+        return True
+
+    def score(self, trace: Trajectory, scenario: Scenario) -> float:
+        # Fail if any call has no result
+        for call in trace.calls:
+            if call.result is None:
+                return 0.0
+        return 1.0
+
+
+def test_registry_has_builtins():
+    """Built-in metrics should be registered at import time."""
+    names = registry.names()
+    assert "sequence" in names
+    assert "required_coverage" in names
+    assert "forbidden" in names
+    assert "termination" in names
+    assert "length" in names
+
+
+def test_register_custom_metric():
+    """Custom metrics can be registered."""
+    test_registry = MetricRegistry()
+    metric = SimpleMetric()
+    test_registry.register(metric)
+    assert test_registry.get("simple_ratio") is metric
+
+
+def test_register_duplicate_raises():
+    """Registering a duplicate metric without override raises."""
+    test_registry = MetricRegistry()
+    metric = SimpleMetric()
+    test_registry.register(metric)
+    with pytest.raises(ValueError, match="already registered"):
+        test_registry.register(metric)
+
+
+def test_register_duplicate_with_override():
+    """Registering with override=True replaces the metric."""
+    test_registry = MetricRegistry()
+    metric1 = SimpleMetric()
+    metric2 = SimpleMetric()
+    test_registry.register(metric1)
+    test_registry.register(metric2, override=True)
+    assert test_registry.get("simple_ratio") is metric2
+
+
+def test_unregister_metric():
+    """Unregistering removes the metric."""
+    test_registry = MetricRegistry()
+    metric = SimpleMetric()
+    test_registry.register(metric)
+    removed = test_registry.unregister("simple_ratio")
+    assert removed is metric
+    assert test_registry.get("simple_ratio") is None
+
+
+def test_unregister_unknown_raises():
+    """Unregistering an unknown metric raises KeyError."""
+    test_registry = MetricRegistry()
+    with pytest.raises(KeyError):
+        test_registry.unregister("nonexistent")
+
+
+def test_metric_plugin_protocol():
+    """SimpleMetric should satisfy MetricPlugin protocol."""
+    metric = SimpleMetric()
+    assert isinstance(metric, MetricPlugin)
+
+
+def test_custom_metric_in_score_trace():
+    """Custom metrics are included in score_trace output."""
+    sc = make_scenario()
+    tr = make_trace(["a", "b"])
+
+    # Register custom metric temporarily
+    metric = SimpleMetric()
+    registry.register(metric, override=True)
+    try:
+        scores = score_trace(tr, sc)
+        assert hasattr(scores, "simple_ratio")
+        assert scores.simple_ratio == 1.0  # type: ignore
+        assert "simple_ratio" in scores.weights
+    finally:
+        registry.unregister("simple_ratio")
+
+
+def test_custom_metric_zero_score():
+    """Custom metric can return 0.0 for empty trajectories."""
+    sc = make_scenario()
+    tr = make_trace([])
+
+    metric = SimpleMetric()
+    registry.register(metric, override=True)
+    try:
+        scores = score_trace(tr, sc)
+        assert scores.simple_ratio == 0.0  # type: ignore
+    finally:
+        registry.unregister("simple_ratio")
+
+
+def test_include_custom_false_ignores_custom():
+    """include_custom=False excludes custom metrics."""
+    sc = make_scenario()
+    tr = make_trace(["a", "b"])
+
+    metric = SimpleMetric()
+    registry.register(metric, override=True)
+    try:
+        scores = score_trace(tr, sc, include_custom=False)
+        assert not hasattr(scores, "simple_ratio")
+    finally:
+        registry.unregister("simple_ratio")
+
+
+def test_custom_hard_violation_metric():
+    """Custom hard violation metrics trigger violations."""
+    sc = make_scenario()
+    # Create trace with a call that has no result
+    tr = Trajectory(
+        scenario_id="s",
+        calls=[ToolCall(index=0, name="a", result=None)],
+        terminated=True,
+    )
+
+    metric = HardViolationMetric()
+    registry.register(metric, override=True)
+    try:
+        scores = score_trace(tr, sc)
+        assert scores.must_have_result == 0.0  # type: ignore
+        assert "must_have_result_violation" in scores.hard_violations
+    finally:
+        registry.unregister("must_have_result")
+
+
+def test_custom_metric_weight_override():
+    """Custom metrics can have their weights overridden."""
+    sc = make_scenario()
+    tr = make_trace(["a", "b"])
+
+    metric = SimpleMetric()
+    registry.register(metric, override=True)
+    try:
+        scores = score_trace(tr, sc, weights={"simple_ratio": 5.0})
+        assert scores.weights["simple_ratio"] == 5.0
+    finally:
+        registry.unregister("simple_ratio")
+
+
+def test_registry_clear():
+    """Clear removes all metrics."""
+    test_registry = MetricRegistry()
+    test_registry.register(SimpleMetric())
+    assert len(test_registry.all()) == 1
+    test_registry.clear()
+    assert len(test_registry.all()) == 0
+
+
+def test_registry_all_returns_list():
+    """all() returns a list of registered metrics."""
+    test_registry = MetricRegistry()
+    test_registry.register(SimpleMetric())
+    all_metrics = test_registry.all()
+    assert isinstance(all_metrics, list)
+    assert len(all_metrics) == 1

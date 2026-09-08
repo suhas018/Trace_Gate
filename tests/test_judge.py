@@ -2,6 +2,7 @@ import pytest
 
 from tracegate.judge import (
     JudgeResult,
+    _summarize_result,
     build_judge_prompt,
     label_for,
     parse_judge_response,
@@ -70,6 +71,42 @@ def test_judge_prompt_contains_task_and_answer():
     assert "Cancel order 1234" in prompt
     assert "order 1234 cancelled" in prompt
     assert "get_orders" in prompt
+
+
+def test_judge_prompt_grounded_on_tool_results():
+    tr = Trajectory(
+        scenario_id="sc",
+        calls=[
+            ToolCall(index=0, name="get_price", arguments={"ticker": "AAPL"}, result={"price": 150}),
+            ToolCall(index=1, name="is_available", arguments={"ticker": "AAPL"}, result={"found": False}),
+        ],
+        terminated=True,
+        final_answer="AAPL is in stock and costs $150.",
+    )
+    prompt = build_judge_prompt(scenario(), tr)
+    assert "{\"price\": 150}" in prompt
+    assert '"found": false' in prompt or "{'found': False}" in prompt
+    assert "call -> result" in prompt
+
+
+def test_judge_prompt_truncates_oversized_result():
+    big = {"rows": ["x" * 2000]}
+    tr = Trajectory(
+        scenario_id="sc",
+        calls=[ToolCall(index=0, name="query", result=big)],
+        terminated=True,
+        final_answer="done",
+    )
+    prompt = build_judge_prompt(scenario(), tr)
+    assert "chars truncated" in prompt
+    assert len(prompt) < 1200
+
+
+def test_summarize_result_variants():
+    assert _summarize_result(None) == "(no result)"
+    assert _summarize_result("plain") == "plain"
+    assert _summarize_result(42) == "42"
+    assert _summarize_result(True) == "true"
 
 
 def test_apply_judge_attaches_results_and_summary():

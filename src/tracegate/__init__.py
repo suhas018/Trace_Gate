@@ -6,7 +6,13 @@ from tracegate.schema import (
     TraceGateError,
     Trajectory,
 )
-from tracegate.metrics import ComponentScores, score_trace
+from tracegate.metrics import (
+    ComponentScores,
+    MetricPlugin,
+    MetricRegistry,
+    registry,
+    score_trace,
+)
 from tracegate.runner import run_scenario
 
 __all__ = [
@@ -17,6 +23,9 @@ __all__ = [
     "TraceGateError",
     "Trajectory",
     "ComponentScores",
+    "MetricPlugin",
+    "MetricRegistry",
+    "registry",
     "score_trace",
     "run_scenario",
 ]

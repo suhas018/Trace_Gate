@@ -13,3 +13,6 @@ venv/
 htmlcov/
 *.json.bak
 .DS_Store
+
+# Personal planning files (DO NOT COMMIT)
+ROADMAP.md

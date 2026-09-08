@@ -18,7 +18,7 @@ import json
 import os
 import re
 import urllib.request
-from typing import Protocol
+from typing import Any, Protocol
 
 from pydantic import BaseModel, Field
 
@@ -98,10 +98,34 @@ def sample_judge(
     )
 
 
+def _summarize_result(result: Any, max_chars: int = 500) -> str:
+    """Compact, truncated, deterministic serialization of a tool-call result.
+
+    The judge must be *grounded* on what the tools actually returned, not just
+    on the fact that a tool was called. This renders an arbitrary result value
+    (dict, list, str, scalar, None) into a bounded string so a huge payload
+    (e.g. an emitted row) can't blow up the prompt.
+    """
+    if result is None:
+        return "(no result)"
+    if isinstance(result, str):
+        text = result
+    else:
+        try:
+            text = json.dumps(result, ensure_ascii=False, default=lambda o: str(o))
+        except (TypeError, ValueError):
+            text = str(result)
+    if len(text) > max_chars:
+        return text[:max_chars] + f"... (+{len(text) - max_chars} chars truncated)"
+    return text
+
+
 def build_judge_prompt(scenario: Scenario, trace: Trajectory) -> str:
     if trace.calls:
         calls = "; ".join(
-            f"{c.name}({json.dumps(c.arguments) if c.arguments else ''})" for c in trace.calls
+            f'{c.name}{(json.dumps(c.arguments) if c.arguments else "")}'
+            f" -> {_summarize_result(c.result)}"
+            for c in trace.calls
         )
     else:
         calls = "(no tool calls)"
@@ -110,11 +134,14 @@ def build_judge_prompt(scenario: Scenario, trace: Trajectory) -> str:
 
 USER REQUEST: {scenario.prompt}
 
-AGENT TOOL CALLS: {calls}
+AGENT TOOL CALLS (call -> result): {calls}
 
 AGENT FINAL ANSWER: "{answer}"
 
-Did the agent satisfy the user's request? Respond with ONLY a JSON object:
+Did the agent satisfy the user's request, given both the tools it called AND the
+results those tools actually returned? If a tool returned an error or empty
+result but the final answer asserts it succeeded, score accordingly.
+Respond with ONLY a JSON object:
 {{"score": 0.0 to 1.0, "rationale": "one sentence explaining your score"}}"""
 
 
@@ -316,6 +343,7 @@ __all__ = [
     "SampledJudgeResult",
     "build_judge",
     "build_judge_prompt",
+    "_summarize_result",
     "label_for",
     "parse_judge_response",
     "sample_judge",

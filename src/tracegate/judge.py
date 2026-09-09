@@ -120,19 +120,28 @@ def _summarize_result(result: Any, max_chars: int = 500) -> str:
     return text
 
 
-def build_judge_prompt(scenario: Scenario, trace: Trajectory) -> str:
+def build_judge_prompt(scenario: Scenario, trace: Trajectory, max_total_chars: int = 8000) -> str:
+    """Build the judge prompt with global budget and scenario grounding.
+
+    - Injects ``scenario.description`` when present (P1 fix: was missing).
+    - Caps per-result at 500 chars via ``_summarize_result`` and total
+      ``call -> result`` segment at ``max_total_chars`` (P1 global budget).
+    """
     if trace.calls:
         calls = "; ".join(
             f'{c.name}{(json.dumps(c.arguments) if c.arguments else "")}'
             f" -> {_summarize_result(c.result)}"
             for c in trace.calls
         )
+        if len(calls) > max_total_chars:
+            calls = calls[:max_total_chars] + f"... (+{len(calls) - max_total_chars} chars truncated, {len(trace.calls)} calls)"
     else:
         calls = "(no tool calls)"
     answer = trace.final_answer if trace.final_answer else "(no final answer produced)"
+    desc = f"\nSCENARIO DESCRIPTION: {scenario.description}" if scenario.description else ""
     return f"""You evaluate whether an AI agent's final answer satisfies a user's request.
 
-USER REQUEST: {scenario.prompt}
+USER REQUEST: {scenario.prompt}{desc}
 
 AGENT TOOL CALLS (call -> result): {calls}
 

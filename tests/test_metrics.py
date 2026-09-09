@@ -307,3 +307,79 @@ def test_registry_all_returns_list():
     all_metrics = test_registry.all()
     assert isinstance(all_metrics, list)
     assert len(all_metrics) == 1
+
+
+# ---- P1 New Metric Tests ----
+
+def test_arg_accuracy_no_pins_is_one():
+    sc = make_scenario(expected_tool_calls=[{"name": "a"}, {"name": "b"}])  # no pinned args
+    tr = make_trace(["a", "b"])
+    s = score_trace(tr, sc)
+    assert s.arg_accuracy == pytest.approx(1.0)
+
+
+def test_arg_accuracy_pinned_match():
+    from tracegate.schema import ExpectedToolCall
+
+    sc = Scenario(
+        id="s",
+        prompt="p",
+        expected_tool_calls=[ExpectedToolCall(name="a", arguments={"x": 1}), ExpectedToolCall(name="b", arguments={"y": 2})],
+        required_tools=["a", "b"],
+    )
+    from tracegate.schema import ToolCall, Trajectory
+
+    tr_good = Trajectory(scenario_id="s", calls=[ToolCall(index=0, name="a", arguments={"x": 1}), ToolCall(index=1, name="b", arguments={"y": 2})], terminated=True)
+    tr_bad = Trajectory(scenario_id="s", calls=[ToolCall(index=0, name="a", arguments={"x": 99}), ToolCall(index=1, name="b", arguments={"y": 2})], terminated=True)
+    assert score_trace(tr_good, sc).arg_accuracy == pytest.approx(1.0)
+    assert score_trace(tr_bad, sc).arg_accuracy == pytest.approx(0.5)
+    # overall drops when arg_accuracy drops
+    assert score_trace(tr_bad, sc).overall < score_trace(tr_good, sc).overall
+
+
+def test_arg_accuracy_subset_match():
+    from tracegate.schema import ExpectedToolCall, ToolCall, Trajectory
+
+    sc = Scenario(
+        id="s",
+        prompt="p",
+        expected_tool_calls=[ExpectedToolCall(name="a", arguments={"x": 1})],
+        required_tools=["a"],
+    )
+    # Superset should still match
+    tr = Trajectory(scenario_id="s", calls=[ToolCall(index=0, name="a", arguments={"x": 1, "extra": 2})], terminated=True)
+    assert score_trace(tr, sc).arg_accuracy == pytest.approx(1.0)
+
+
+def test_dangerous_without_confirm_heuristic():
+    from tracegate.schema import ToolCall, Trajectory
+
+    sc = make_scenario()
+    # No dangerous call
+    tr_safe = Trajectory(scenario_id="s", calls=[ToolCall(index=0, name="a"), ToolCall(index=1, name="b")], terminated=True)
+    assert score_trace(tr_safe, sc).dangerous_without_confirm == pytest.approx(1.0)
+    # Dangerous without confirm
+    tr_unsafe = Trajectory(scenario_id="s", calls=[ToolCall(index=0, name="delete_orders")], terminated=True)
+    s = score_trace(tr_unsafe, sc)
+    assert s.dangerous_without_confirm == pytest.approx(0.0)
+    assert "dangerous_without_confirm_violation" in s.hard_violations
+    # Dangerous with preceding confirm
+    tr_ok = Trajectory(scenario_id="s", calls=[ToolCall(index=0, name="confirm"), ToolCall(index=1, name="delete_orders")], terminated=True)
+    assert score_trace(tr_ok, sc).dangerous_without_confirm == pytest.approx(1.0)
+
+
+def test_dangerous_with_registry():
+    from tracegate.schema import ToolCall, ToolRegistry, ToolSpec, Trajectory
+
+    reg = ToolRegistry(tools=[ToolSpec(name="a"), ToolSpec(name="confirm"), ToolSpec(name="delete_orders", dangerous=True)])
+    sc = make_scenario()
+    tr_unsafe = Trajectory(scenario_id="s", calls=[ToolCall(index=0, name="delete_orders")], terminated=True)
+    tr_safe = Trajectory(scenario_id="s", calls=[ToolCall(index=0, name="confirm"), ToolCall(index=1, name="delete_orders")], terminated=True)
+    assert score_trace(tr_unsafe, sc, tool_registry=reg).dangerous_without_confirm == pytest.approx(0.0)
+    assert score_trace(tr_safe, sc, tool_registry=reg).dangerous_without_confirm == pytest.approx(1.0)
+
+
+def test_registry_has_new_builtins():
+    names = registry.names()
+    assert "arg_accuracy" in names
+    assert "dangerous_without_confirm" in names

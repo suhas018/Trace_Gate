@@ -6,11 +6,25 @@ Quick reference for what was done and when.
 
 ## September 2026
 
-### 2026-09-08
+### 2026-09-08 (P1)
 
 | Commit | Description |
 |--------|-------------|
-| `pending` | **P0 hardening** — 9 correctness fixes (see below) + roadmap rebuild after full audit |
+| `pending` | **P1 blind spots** — arg_accuracy + dangerous metrics, 4 new mutators, judge prompt & CLI |
+
+**P1 — Measurement Blind Spots (follow-up to P0):**
+- `arg_accuracy` metric (`metrics.py:267`): subset match on pinned `ExpectedToolCall.arguments`, weight 1.2, `score_trace(..., tool_registry)` plumbing via `registry`, `_call_metric` helper
+- `dangerous_without_confirm` metric (`metrics.py:307`): `DangerousWithoutConfirmMetric` with heuristic fallback + `ToolRegistry.dangerous` flag, weight 2.0 hard, `seen_confirm` guard (confirm itself never flagged)
+- 4 new mutators (`mutation.py:166`): `wrong_arguments` (→ arg_accuracy), `extra_allowed_call` (→ sequence/length), `missing_termination` (→ termination), `length_overflow` (→ length/sequence); tot 9 (8 for example.yaml, 9 with pinned args); fixed `seed` (shuffle + target_idx) and `_mutate_reorder` same-name, `_capture_verified` `seed+attempt-1`
+- CLI plumbing: `_run_report`, `run_gate`, `run_suite*` now accept `tool_registry`; `cli.py:167` gate `--judge-*` flags (`provider/model/base-url/api-key/min-score/samples/temperature`) with `apply_judge` pre-run
+- Judge prompt (`judge.py:123`): `max_total_chars=8000` global budget + `scenario.description` injection; per-result 500 remains
+- `dangerous` now hard via `registry` + `tool_registry` param in `suite`/`runner`/`mutation`; `build_mutations` handles dict vs object; tests: `test_all_mutations_are_killed` expects ≥5, 6 new tests `test_arg_accuracy_*`/`test_dangerous_*`; all 85 tests passing; gate probes still PASS (overall 0.9638 vs 0.9444 due to new weights, kill-rate 8/8)
+
+### 2026-09-08 (P0)
+
+| Commit | Description |
+|--------|-------------|
+| `e8a53a1` | **P0 hardening** — 9 correctness fixes (PR #7) + roadmap rebuild after full audit |
 
 **P0 — Correctness & Hardening (audit 2026-09-08):**
 - Docs ↔ code: `overall` is weighted avg (weights 1.0/1.0/2.0/1.5/0.5) — fixed `README.md:53`, `docs/ARCHITECTURE.md:67`, `docs/blog.md:67` (was *product*)

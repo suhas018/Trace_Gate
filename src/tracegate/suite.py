@@ -53,7 +53,7 @@ def _worst(runs: list[RunResult]) -> RunResult:
     return min(runs, key=lambda r: (r.scores.overall, -len(r.scores.hard_violations)))
 
 
-def _error_result(scenario: Scenario, exc: Exception, weights: dict[str, float] | None = None) -> RunResult:
+def _error_result(scenario: Scenario, exc: Exception, weights: dict[str, float] | None = None, tool_registry=None) -> RunResult:
     """Create a failing RunResult when an agent crashes on a scenario."""
     # Synthetic trace that will score 0 and carry hard violations
     trace = Trajectory(
@@ -64,7 +64,7 @@ def _error_result(scenario: Scenario, exc: Exception, weights: dict[str, float] 
     )
     from tracegate.metrics import score_trace as _score
 
-    scores = _score(trace, scenario, weights=weights)
+    scores = _score(trace, scenario, weights=weights, tool_registry=tool_registry)
     # Ensure at least one hard violation so gate fails deterministically
     if "agent_error" not in scores.hard_violations:
         scores.hard_violations.append("agent_error")
@@ -77,6 +77,7 @@ def run_suite(
     weights: dict[str, float] | None = None,
     run_id: str = "",
     num_rollouts: int = 1,
+    tool_registry=None,
 ) -> SuiteReport:
     """Run every scenario through the agent and score each trajectory.
 
@@ -95,9 +96,9 @@ def run_suite(
         runs: list[RunResult] = []
         for _ in range(max(1, num_rollouts)):
             try:
-                runs.append(run_scenario(scenario, agent, weights=weights))
+                runs.append(run_scenario(scenario, agent, weights=weights, tool_registry=tool_registry))
             except Exception as exc:  # noqa: BLE001 — isolate per-scenario
-                runs.append(_error_result(scenario, exc, weights=weights))
+                runs.append(_error_result(scenario, exc, weights=weights, tool_registry=tool_registry))
         rollouts[scenario.id] = [r.scores for r in runs]
         results.append(_worst(runs))
     overalls = [r.scores.overall for r in results]
@@ -125,9 +126,10 @@ def run_suite_with_mutations(
     run_id: str = "",
     seed: int = 42,
     num_rollouts: int = 1,
+    tool_registry=None,
 ) -> SuiteReport:
     """Run the suite and, for each scenario, mutation-test the golden trace."""
-    report = run_suite(scenarios, agent, weights=weights, run_id=run_id, num_rollouts=num_rollouts)
+    report = run_suite(scenarios, agent, weights=weights, run_id=run_id, num_rollouts=num_rollouts, tool_registry=tool_registry)
     mutations: list[MutationSuiteResult] = []
     for result in report.results:
         mutations.append(
@@ -137,6 +139,7 @@ def run_suite_with_mutations(
                 result.scores,
                 weights=weights,
                 seed=seed,
+                tool_registry=tool_registry,
             )
         )
     report.mutation = mutations
@@ -222,6 +225,7 @@ def run_gate(
     num_rollouts: int = 1,
     judge_scores: dict[str, SampledJudgeResult] | None = None,
     judge_min_score: float | None = None,
+    tool_registry=None,
 ) -> GateReport:
     """Compare a fresh suite run against a stored baseline and produce verdicts.
 
@@ -235,7 +239,7 @@ def run_gate(
     downgraded to REGRESSION — this is how the goal-refusal blind spot gets
     closed. Fail-closed: an UNAVAILABLE judge with gating enabled fails.
     """
-    current = run_suite(scenarios, agent, weights=weights, num_rollouts=num_rollouts)
+    current = run_suite(scenarios, agent, weights=weights, num_rollouts=num_rollouts, tool_registry=tool_registry)
     per_scenario: list[GateResult] = []
     for scenario in scenarios:
         base = baseline.scores_for(scenario.id)

@@ -43,8 +43,9 @@ def test_all_mutations_are_killed():
     scores = score_trace(trace, sc)
     assert scores.overall == pytest.approx(1.0)
     result = run_mutation_suite(sc, trace, scores)
-    assert result.total == 5
-    assert result.killed == 5
+    # P1 added 4 new mutators (wrong_arguments filtered without pinned args → 8 total here)
+    assert result.total >= 5
+    assert result.killed == result.total
     assert result.kill_rate == pytest.approx(1.0)
     for r in result.results:
         assert r.killed, f"{r.name} survived: {r.detail}"

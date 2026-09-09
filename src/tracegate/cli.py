@@ -15,6 +15,7 @@ from tracegate.io_utils import load_behavior_config, load_json, load_scenario_su
 from tracegate.metrics import ComponentScores
 from tracegate.suite import (
     SuiteReport,
+    apply_judge,
     run_gate,
     run_suite,
     run_suite_with_mutations,
@@ -84,9 +85,9 @@ def _run_report(scenarios, registry, behaviors, behavior_path, mutation, seed, r
     agent = _build_agent(registry, behaviors, per_scenario)
     if mutation:
         return run_suite_with_mutations(
-            scenarios, agent, run_id=run_id, seed=seed, num_rollouts=rollouts
+            scenarios, agent, run_id=run_id, seed=seed, num_rollouts=rollouts, tool_registry=registry
         )
-    return run_suite(scenarios, agent, run_id=run_id, num_rollouts=rollouts)
+    return run_suite(scenarios, agent, run_id=run_id, num_rollouts=rollouts, tool_registry=registry)
 
 
 def cmd_run(args) -> int:
@@ -111,10 +112,18 @@ def _capture_verified(scenarios, agent, args, out: str) -> int:
     baselines are refused, not persisted — the CI equivalent of the demo's
     capture loop.
     """
+    # Need registry for metrics that require it (dangerous_without_confirm)
+    # We reload it from args.suite; fallback to agent's registry if needed.
+    try:
+        _, _reg = load_scenario_suite(args.suite)
+    except Exception:
+        _reg = getattr(agent, "registry", None)
     last_kill = 0.0
     for attempt in range(1, args.retries + 1):
+        # Vary seed per attempt so re-rolls produce different mutants (P1 fix)
+        attempt_seed = args.seed + attempt - 1
         report = run_suite_with_mutations(
-            scenarios, agent, run_id=args.run_id, seed=args.seed, num_rollouts=args.rollouts
+            scenarios, agent, run_id=args.run_id, seed=attempt_seed, num_rollouts=args.rollouts, tool_registry=_reg
         )
         bad = [r for r in report.results if r.scores.hard_violations]
         kill = report.summary.get("mean_kill_rate", 0.0)
@@ -161,7 +170,36 @@ def cmd_gate(args) -> int:
     per_scenario = args.behavior is not None
     agent = _build_agent(registry, behaviors, per_scenario)
     baseline = SuiteReport.model_validate(load_json(args.reference))
-    report = run_gate(scenarios, agent, baseline, delta=args.delta, num_rollouts=args.rollouts)
+    # Optional judge gating (P1: wire judge to CLI)
+    judge_scores = None
+    if getattr(args, "judge_min_score", None) is not None:
+        from tracegate.judge import build_judge
+
+        judge = build_judge(
+            provider=getattr(args, "judge_provider", "ollama") or "ollama",
+            model=getattr(args, "judge_model", None),
+            base_url=getattr(args, "judge_base_url", None),
+            api_key=getattr(args, "judge_api_key", None),
+            temperature=getattr(args, "judge_temperature", 0.0) or 0.0,
+        )
+        # Need a pre-run to score traces before gating
+        tmp_report = run_suite(scenarios, agent, num_rollouts=args.rollouts, tool_registry=registry)
+        tmp_report = apply_judge(tmp_report, scenarios, judge, samples=getattr(args, "judge_samples", 3) or 3)
+        judge_scores = {j.scenario_id: j for j in tmp_report.judges}
+        print(f"judge: provider={getattr(args, 'judge_provider', 'ollama')} min_score={args.judge_min_score} samples={getattr(args, 'judge_samples', 3)}")
+        for j in tmp_report.judges:
+            print(f"  {j.scenario_id:<{MAX_COLS}} {j.label:<10} {j.score}")
+
+    report = run_gate(
+        scenarios,
+        agent,
+        baseline,
+        delta=args.delta,
+        num_rollouts=args.rollouts,
+        tool_registry=registry,
+        judge_scores=judge_scores,
+        judge_min_score=getattr(args, "judge_min_score", None),
+    )
 
     print(f"{'scenario':<{MAX_COLS}}{'verdict':<10}  reason")
     failures = 0
@@ -217,6 +255,14 @@ def build_parser() -> argparse.ArgumentParser:
                        help="baseline: max verify attempts (default 3)")
         p.add_argument("-r", "--reference", default=None, help="baseline JSON (gate)")
         p.add_argument("--delta", type=float, default=1e-9, help="regression tolerance (gate)")
+        # Judge gating (P1: wire judge to CLI)
+        p.add_argument("--judge-provider", default=None, help="judge provider: ollama or api/openai (gate)")
+        p.add_argument("--judge-model", default=None, help="judge model name (gate)")
+        p.add_argument("--judge-base-url", default=None, help="judge base_url for OpenAI-compatible endpoint (gate)")
+        p.add_argument("--judge-api-key", default=None, help="judge API key (gate)")
+        p.add_argument("--judge-min-score", type=float, default=None, help="enable judge gating: fail if satisfaction < this (gate, default off)")
+        p.add_argument("--judge-samples", type=int, default=3, help="N-shot samples for judge (gate)")
+        p.add_argument("--judge-temperature", type=float, default=0.0, help="judge temperature (gate)")
         p.set_defaults(fn=fn)
 
     return parser

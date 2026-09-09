@@ -19,10 +19,11 @@ def run_scenario(
     scenario: Scenario,
     agent: AgentAdapter,
     weights: dict[str, float] | None = None,
+    tool_registry=None,
 ) -> RunResult:
     """Run one scenario through an agent adapter and score the resulting trace."""
     trace = agent.run(scenario)
-    scores = score_trace(trace, scenario, weights=weights)
+    scores = score_trace(trace, scenario, weights=weights, tool_registry=tool_registry)
     return RunResult(scenario_id=scenario.id, trace=trace, scores=scores)
 
 

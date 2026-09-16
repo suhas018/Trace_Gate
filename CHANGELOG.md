@@ -6,6 +6,18 @@ Quick reference for what was done and when.
 
 ## September 2026
 
+### 2026-09-08 (P2)
+
+| Commit | Description |
+|--------|-------------|
+| `pending` | **P2 caching** — `sample_judge` / `CachedJudge` in-memory LRU |
+
+**P2 — Judge Reliability & Cost:**
+- `JUDGE_PROMPT_VERSION=1.1` (`judge.py:17`), `_SAMPLE_CACHE/_SINGLE_CACHE` LRU 128, `sample_judge(..., use_cache=True)` keyed by `id+trace_hash+model+prompt_version+n+prompt_hash` (`judge.py:44`), `_trace_hash` via sha256, `CachedJudge` wrapper with hits/misses, `clear_judge_cache()`
+- Cache hit: 2nd `sample_judge` same trace = 0 LLM calls (counting judge: 3 → 3, not 6); different trace misses; `clear` evicts
+- `build_judge_prompt` already has global budget + description from P1, now versioned for cache bust
+- Tests: `test_judge_prompt_injects_description_and_global_budget`, `test_sample_judge_cache_hits`, `test_cached_judge_single` (3 new, total 14 judge tests, 88 overall)
+
 ### 2026-09-08 (P1)
 
 | Commit | Description |

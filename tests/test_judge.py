@@ -1,11 +1,14 @@
 import pytest
 
 from tracegate.judge import (
+    CachedJudge,
     JudgeResult,
     _summarize_result,
     build_judge_prompt,
+    clear_judge_cache,
     label_for,
     parse_judge_response,
+    sample_judge,
 )
 from tracegate.metrics import ComponentScores
 from tracegate.runner import RunResult
@@ -141,3 +144,76 @@ def test_apply_judge_missing_trace_is_unavailable():
     )
     apply_judge(report, [sc], judge)
     assert report.judges[0].label == "UNAVAILABLE"
+
+
+def test_judge_prompt_injects_description_and_global_budget():
+    sc = Scenario(id="sc", prompt="do thing", description="important context", min_calls=0)
+    tr = Trajectory(
+        scenario_id="sc",
+        calls=[ToolCall(index=i, name="a", result="x" * 1000) for i in range(20)],
+        terminated=True,
+        final_answer="done",
+    )
+    prompt = build_judge_prompt(sc, tr)
+    assert "important context" in prompt
+    assert "SCENARIO DESCRIPTION" in prompt
+    # Global budget caps calls segment at 8000 + overhead, but per-result already 500 each
+    # Ensure total prompt is bounded (20*500=10000 but capped to 8000 segment + wrapper < 9000)
+    assert len(prompt) < 9000
+    assert "truncated" in prompt
+
+
+def test_sample_judge_cache_hits():
+    clear_judge_cache()
+
+    class CountingJudge:
+        model_name = "test-model"
+
+        def __init__(self):
+            self.calls = 0
+
+        def judge(self, scenario, trace):
+            self.calls += 1
+            return JudgeResult(scenario_id=scenario.id, score=0.9, label="SATISFIED", rationale="ok", judge_model=self.model_name)
+
+    sc = Scenario(id="s", prompt="p", min_calls=0)
+    tr = Trajectory(scenario_id="s", calls=[ToolCall(index=0, name="a")], terminated=True)
+    j = CountingJudge()
+    r1 = sample_judge(sc, tr, j, n=3)
+    assert j.calls == 3
+    r2 = sample_judge(sc, tr, j, n=3)
+    assert j.calls == 3  # cached, no new calls
+    assert r1.score == r2.score
+    # Different trace should miss
+    tr2 = Trajectory(scenario_id="s", calls=[ToolCall(index=0, name="b")], terminated=True)
+    r3 = sample_judge(sc, tr2, j, n=3)
+    assert j.calls == 6
+    clear_judge_cache()
+    r4 = sample_judge(sc, tr, j, n=3)
+    assert j.calls == 9  # after clear, re-calls
+
+
+def test_cached_judge_single():
+    clear_judge_cache()
+
+    class SingleJudge:
+        model_name = "single-model"
+
+        def __init__(self):
+            self.calls = 0
+
+        def judge(self, scenario, trace):
+            self.calls += 1
+            return JudgeResult(scenario_id=scenario.id, score=0.8, label="SATISFIED", judge_model=self.model_name)
+
+    sc = Scenario(id="s", prompt="p", min_calls=0)
+    tr = Trajectory(scenario_id="s", calls=[ToolCall(index=0, name="a")], terminated=True)
+    inner = SingleJudge()
+    cached = CachedJudge(inner)
+    r1 = cached.judge(sc, tr)
+    assert inner.calls == 1
+    assert cached.misses == 1 and cached.hits == 0
+    r2 = cached.judge(sc, tr)
+    assert inner.calls == 1
+    assert cached.hits == 1
+    assert r1.score == r2.score

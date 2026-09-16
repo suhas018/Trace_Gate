@@ -14,6 +14,7 @@ Design rules:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -23,6 +24,47 @@ from typing import Any, Protocol
 from pydantic import BaseModel, Field
 
 from tracegate.schema import Scenario, Trajectory
+
+JUDGE_PROMPT_VERSION = "1.1"
+
+# In-memory caches for cost reduction (P2: judge caching)
+_MAX_CACHE_SIZE = 128
+_SAMPLE_CACHE: dict[str, SampledJudgeResult] = {}
+_SINGLE_CACHE: dict[str, JudgeResult] = {}
+
+
+def _trace_hash(trace: Trajectory) -> str:
+    """Stable hash for a trajectory's content (for cache keys)."""
+    payload = json.dumps(
+        {
+            "scenario_id": trace.scenario_id,
+            "calls": [(c.name, c.arguments, str(c.result)) for c in trace.calls],
+            "terminated": trace.terminated,
+            "final_answer": trace.final_answer,
+        },
+        sort_keys=True,
+        default=str,
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
+def _sample_cache_key(scenario: Scenario, trace: Trajectory, judge: LLMJudge, n: int) -> str:
+    model = getattr(judge, "model_name", getattr(judge, "judge_model", str(type(judge).__name__)))
+    prompt_hash = hashlib.sha256(scenario.prompt.encode()).hexdigest()[:8]
+    return f"{scenario.id}:{_trace_hash(trace)}:{model}:{JUDGE_PROMPT_VERSION}:{n}:{prompt_hash}"
+
+
+def clear_judge_cache() -> None:
+    """Clear both single and sampled judge caches (useful for tests)."""
+    _SAMPLE_CACHE.clear()
+    _SINGLE_CACHE.clear()
+
+
+def _evict_if_needed(cache: dict) -> None:
+    if len(cache) > _MAX_CACHE_SIZE:
+        # Remove oldest (first inserted) – dict preserves insertion order PY3.7+
+        oldest = next(iter(cache))
+        cache.pop(oldest)
 
 
 class JudgeResult(BaseModel):
@@ -68,8 +110,20 @@ def sample_judge(
     trace: Trajectory,
     judge: LLMJudge,
     n: int = 3,
+    use_cache: bool = True,
 ) -> SampledJudgeResult:
-    """Run the judge ``n`` times and aggregate into a :class:`SampledJudgeResult`."""
+    """Run the judge ``n`` times and aggregate into a :class:`SampledJudgeResult`.
+
+    When ``use_cache`` is True (default), results are cached by
+    ``(scenario.id, trace hash, judge model, prompt version, n)``. Repeated
+    evaluations of the same trace (e.g., CI re-runs) return instantly without
+    LLM calls. Cache is in-memory LRU (128 entries) and can be cleared via
+    :func:`clear_judge_cache`.
+    """
+    if use_cache:
+        key = _sample_cache_key(scenario, trace, judge, n)
+        if key in _SAMPLE_CACHE:
+            return _SAMPLE_CACHE[key]
     results = [judge.judge(scenario, trace) for _ in range(n)]
     scores = [r.score for r in results if r.score is not None]
     labels = [r.label for r in results]
@@ -85,7 +139,7 @@ def sample_judge(
         agreement = labels.count(majority) / len(labels)
     else:
         agreement = 0.0
-    return SampledJudgeResult(
+    out = SampledJudgeResult(
         scenario_id=scenario.id,
         score=mean,
         label=label,
@@ -96,6 +150,10 @@ def sample_judge(
         judge_model=results[0].judge_model if results else "",
         rationales=[r.rationale for r in results],
     )
+    if use_cache:
+        _SAMPLE_CACHE[key] = out
+        _evict_if_needed(_SAMPLE_CACHE)
+    return out
 
 
 def _summarize_result(result: Any, max_chars: int = 500) -> str:
@@ -314,6 +372,45 @@ class OpenAICompatibleJudge:
         )
 
 
+class CachedJudge:
+    """Wraps any ``LLMJudge`` with an in-memory cache (P2 cost reduction).
+
+    Single-call cache keyed by ``(scenario.id, trace hash, model, prompt version)``.
+    For N-shot, use :func:`sample_judge`'s own cache (which is higher-level).
+    This wrapper is useful when the same trace is judged repeatedly outside
+    ``sample_judge`` (e.g., gate re-runs).
+
+    Example::
+
+        judge = CachedJudge(OpenAICompatibleJudge(model="gpt-4o-mini"))
+        judge.judge(scenario, trace)  # LLM call
+        judge.judge(scenario, trace)  # cached, no LLM call
+    """
+
+    def __init__(self, inner: LLMJudge, maxsize: int = 128):
+        self.inner = inner
+        self.maxsize = maxsize
+        self.hits = 0
+        self.misses = 0
+        # Expose model_name for cache-key compatibility with sample_judge
+        self.model_name = getattr(inner, "model_name", getattr(inner, "judge_model", str(type(inner).__name__)))
+
+    def judge(self, scenario: Scenario, trace: Trajectory) -> JudgeResult:
+        key = f"{scenario.id}:{_trace_hash(trace)}:{self.model_name}:{JUDGE_PROMPT_VERSION}:{hashlib.sha256(scenario.prompt.encode()).hexdigest()[:8]}"
+        if key in _SINGLE_CACHE:
+            self.hits += 1
+            return _SINGLE_CACHE[key]
+        self.misses += 1
+        res = self.inner.judge(scenario, trace)
+        _SINGLE_CACHE[key] = res
+        _evict_if_needed(_SINGLE_CACHE)
+        return res
+
+    def clear(self) -> None:
+        _SINGLE_CACHE.clear()
+        self.hits = self.misses = 0
+
+
 def build_judge(
     provider: str = "ollama",
     model: str | None = None,
@@ -350,10 +447,13 @@ __all__ = [
     "OllamaJudge",
     "OpenAICompatibleJudge",
     "SampledJudgeResult",
+    "CachedJudge",
+    "JUDGE_PROMPT_VERSION",
     "build_judge",
     "build_judge_prompt",
     "_summarize_result",
     "label_for",
     "parse_judge_response",
     "sample_judge",
+    "clear_judge_cache",
 ]

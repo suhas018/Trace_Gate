@@ -170,7 +170,7 @@ def cmd_gate(args) -> int:
     per_scenario = args.behavior is not None
     agent = _build_agent(registry, behaviors, per_scenario)
     baseline = SuiteReport.model_validate(load_json(args.reference))
-    # Optional judge gating (P1: wire judge to CLI)
+    # Optional judge gating (P1: wire judge to CLI, P2: sample cache)
     judge_scores = None
     if getattr(args, "judge_min_score", None) is not None:
         from tracegate.judge import build_judge

@@ -10,13 +10,14 @@ Quick reference for what was done and when.
 
 | Commit | Description |
 |--------|-------------|
-| `pending` | **P2 caching** — `sample_judge` / `CachedJudge` in-memory LRU |
+| `pending` | **P2 judge** — caching, per-call grounding, calibration, hardening |
 
-**P2 — Judge Reliability & Cost:**
-- `JUDGE_PROMPT_VERSION=1.1` (`judge.py:17`), `_SAMPLE_CACHE/_SINGLE_CACHE` LRU 128, `sample_judge(..., use_cache=True)` keyed by `id+trace_hash+model+prompt_version+n+prompt_hash` (`judge.py:44`), `_trace_hash` via sha256, `CachedJudge` wrapper with hits/misses, `clear_judge_cache()`
-- Cache hit: 2nd `sample_judge` same trace = 0 LLM calls (counting judge: 3 → 3, not 6); different trace misses; `clear` evicts
-- `build_judge_prompt` already has global budget + description from P1, now versioned for cache bust
-- Tests: `test_judge_prompt_injects_description_and_global_budget`, `test_sample_judge_cache_hits`, `test_cached_judge_single` (3 new, total 14 judge tests, 88 overall)
+**P2 — Judge Reliability & Cost (5/5 done):**
+- **Caching** (`judge.py:17`): `JUDGE_PROMPT_VERSION=1.1`, `_SAMPLE_CACHE/_SINGLE_CACHE` LRU 128, `sample_judge(..., use_cache=True)` keyed `id+trace_hash+model+prompt_version+n+prompt_hash`, `_trace_hash` sha256, `CachedJudge` hits/misses, `clear_judge_cache()` — 2nd `sample_judge` same trace = 0 calls (3→3 not 6)
+- **Per-call grounding** (`judge.py:185`): `PerCallGroundingResult`, `build_per_call_prompt`, `judge_per_call`, `sample_judge_per_call` (N-shot mean per call) — judges each `ToolCall` warranted vs prior results, not just final answer
+- **Calibration** (`judge.py:135`): `SampledJudgeResult.score_std`, `sample_judge` std dev + deterministic tie-break `sorted(set(labels)) max(count,label)`, `agreement` stable (was non-deterministic `max(set)`)
+- **Hardening** (`judge.py:472`): `OpenAICompatibleJudge(retries=3, backoff=0.5, use_json_mode=True)` → `response_format json_object`, `_call` retry loop for 429/5xx/timeout, drops `response_format` on retry if rejected
+- `build_judge_prompt` global budget + description already from P1, now versioned for cache bust; tests: `test_judge_prompt_injects_description_and_global_budget`, `test_sample_judge_cache_hits`, `test_cached_judge_single` (3 new, 14 judge tests, 88 overall)
 
 ### 2026-09-08 (P1)
 

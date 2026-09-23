@@ -80,14 +80,14 @@ def _print_mutations(report: SuiteReport) -> None:
         print(f"  mean kill-rate: {mean:.2f}")
 
 
-def _run_report(scenarios, registry, behaviors, behavior_path, mutation, seed, run_id, rollouts):
+def _run_report(scenarios, registry, behaviors, behavior_path, mutation, seed, run_id, rollouts, jobs=1):
     per_scenario = behavior_path is not None
     agent = _build_agent(registry, behaviors, per_scenario)
     if mutation:
         return run_suite_with_mutations(
-            scenarios, agent, run_id=run_id, seed=seed, num_rollouts=rollouts, tool_registry=registry
+            scenarios, agent, run_id=run_id, seed=seed, num_rollouts=rollouts, tool_registry=registry, jobs=jobs
         )
-    return run_suite(scenarios, agent, run_id=run_id, num_rollouts=rollouts, tool_registry=registry)
+    return run_suite(scenarios, agent, run_id=run_id, num_rollouts=rollouts, tool_registry=registry, jobs=jobs)
 
 
 def cmd_run(args) -> int:
@@ -95,7 +95,7 @@ def cmd_run(args) -> int:
     behaviors = load_behavior_config(args.behavior)
     report = _run_report(
         scenarios, registry, behaviors, args.behavior, args.mutation, args.seed, args.run_id,
-        args.rollouts,
+        args.rollouts, getattr(args, "jobs", 1) or 1,
     )
     _print_report(report)
     if args.out:
@@ -123,7 +123,7 @@ def _capture_verified(scenarios, agent, args, out: str) -> int:
         # Vary seed per attempt so re-rolls produce different mutants (P1 fix)
         attempt_seed = args.seed + attempt - 1
         report = run_suite_with_mutations(
-            scenarios, agent, run_id=args.run_id, seed=attempt_seed, num_rollouts=args.rollouts, tool_registry=_reg
+            scenarios, agent, run_id=args.run_id, seed=attempt_seed, num_rollouts=args.rollouts, tool_registry=_reg, jobs=getattr(args, "jobs", 1) or 1
         )
         bad = [r for r in report.results if r.scores.hard_violations]
         kill = report.summary.get("mean_kill_rate", 0.0)
@@ -156,7 +156,7 @@ def cmd_baseline(args) -> int:
         return _capture_verified(scenarios, agent, args, out)
     report = _run_report(
         scenarios, registry, behaviors, args.behavior, args.mutation, args.seed, args.run_id,
-        args.rollouts,
+        args.rollouts, getattr(args, "jobs", 1) or 1,
     )
     save_json(report.model_dump(mode="json"), out)
     print(f"baseline written to {out}")
@@ -183,7 +183,7 @@ def cmd_gate(args) -> int:
             temperature=getattr(args, "judge_temperature", 0.0) or 0.0,
         )
         # Need a pre-run to score traces before gating
-        tmp_report = run_suite(scenarios, agent, num_rollouts=args.rollouts, tool_registry=registry)
+        tmp_report = run_suite(scenarios, agent, num_rollouts=args.rollouts, tool_registry=registry, jobs=getattr(args, "jobs", 1) or 1)
         tmp_report = apply_judge(tmp_report, scenarios, judge, samples=getattr(args, "judge_samples", 3) or 3)
         judge_scores = {j.scenario_id: j for j in tmp_report.judges}
         print(f"judge: provider={getattr(args, 'judge_provider', 'ollama')} min_score={args.judge_min_score} samples={getattr(args, 'judge_samples', 3)}")
@@ -199,6 +199,7 @@ def cmd_gate(args) -> int:
         tool_registry=registry,
         judge_scores=judge_scores,
         judge_min_score=getattr(args, "judge_min_score", None),
+        jobs=getattr(args, "jobs", 1) or 1,
     )
 
     print(f"{'scenario':<{MAX_COLS}}{'verdict':<10}  reason")
@@ -217,7 +218,7 @@ def cmd_mutate(args) -> int:
     behaviors = load_behavior_config(args.behavior)
     report = _run_report(
         scenarios, registry, behaviors, args.behavior, True, args.seed, args.run_id,
-        args.rollouts,
+        args.rollouts, getattr(args, "jobs", 1) or 1,
     )
     _print_mutations(report)
     if args.out:
@@ -227,10 +228,13 @@ def cmd_mutate(args) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    from tracegate import __version__
+
     parser = argparse.ArgumentParser(
         prog="tracegate",
         description="Deterministic, mutation-validated regression infrastructure for agentic pipelines.",
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     for name, fn, help_text in (
@@ -263,6 +267,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--judge-min-score", type=float, default=None, help="enable judge gating: fail if satisfaction < this (gate, default off)")
         p.add_argument("--judge-samples", type=int, default=3, help="N-shot samples for judge (gate)")
         p.add_argument("--judge-temperature", type=float, default=0.0, help="judge temperature (gate)")
+        p.add_argument("--jobs", type=int, default=1, help="parallel jobs for scenario execution (P3, default 1)")
         p.set_defaults(fn=fn)
 
     return parser

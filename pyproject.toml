@@ -10,10 +10,26 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "suhas" }]
+keywords = ["agent", "evaluation", "regression", "llm", "trajectory", "testing"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "pydantic>=2.5",
     "PyYAML>=6.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/suhas018/Trace_Gate"
+Repository = "https://github.com/suhas018/Trace_Gate"
+Issues = "https://github.com/suhas018/Trace_Gate/issues"
 
 [project.optional-dependencies]
 langgraph = ["langgraph>=0.2"]

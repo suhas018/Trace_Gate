@@ -34,6 +34,20 @@ def _build_agent(tools_registry, behaviors: dict[str, AgentBehavior], per_scenar
     return ScriptedAgent(registry, behavior)
 
 
+def _parse_weights(s: str | None) -> dict[str, float] | None:
+    if not s:
+        return None
+    import json as _json
+
+    try:
+        data = _json.loads(s)
+    except Exception as exc:
+        raise ValueError(f"--weights must be JSON, e.g. '{{\"forbidden\":5}}': {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError("--weights JSON must be an object")
+    return {k: float(v) for k, v in data.items()}
+
+
 def _fmt(x: float, width: int = 8) -> str:
     return f"{x:.4f}".rjust(width)
 
@@ -80,22 +94,23 @@ def _print_mutations(report: SuiteReport) -> None:
         print(f"  mean kill-rate: {mean:.2f}")
 
 
-def _run_report(scenarios, registry, behaviors, behavior_path, mutation, seed, run_id, rollouts, jobs=1):
+def _run_report(scenarios, registry, behaviors, behavior_path, mutation, seed, run_id, rollouts, jobs=1, weights=None):
     per_scenario = behavior_path is not None
     agent = _build_agent(registry, behaviors, per_scenario)
     if mutation:
         return run_suite_with_mutations(
-            scenarios, agent, run_id=run_id, seed=seed, num_rollouts=rollouts, tool_registry=registry, jobs=jobs
+            scenarios, agent, run_id=run_id, seed=seed, num_rollouts=rollouts, tool_registry=registry, jobs=jobs, weights=weights
         )
-    return run_suite(scenarios, agent, run_id=run_id, num_rollouts=rollouts, tool_registry=registry, jobs=jobs)
+    return run_suite(scenarios, agent, run_id=run_id, num_rollouts=rollouts, tool_registry=registry, jobs=jobs, weights=weights)
 
 
 def cmd_run(args) -> int:
     scenarios, registry = load_scenario_suite(args.suite)
     behaviors = load_behavior_config(args.behavior)
+    weights = _parse_weights(getattr(args, "weights", None))
     report = _run_report(
         scenarios, registry, behaviors, args.behavior, args.mutation, args.seed, args.run_id,
-        args.rollouts, getattr(args, "jobs", 1) or 1,
+        args.rollouts, getattr(args, "jobs", 1) or 1, weights,
     )
     _print_report(report)
     if args.out:
@@ -118,12 +133,13 @@ def _capture_verified(scenarios, agent, args, out: str) -> int:
         _, _reg = load_scenario_suite(args.suite)
     except Exception:
         _reg = getattr(agent, "registry", None)
+    weights = _parse_weights(getattr(args, "weights", None))
     last_kill = 0.0
     for attempt in range(1, args.retries + 1):
         # Vary seed per attempt so re-rolls produce different mutants (P1 fix)
         attempt_seed = args.seed + attempt - 1
         report = run_suite_with_mutations(
-            scenarios, agent, run_id=args.run_id, seed=attempt_seed, num_rollouts=args.rollouts, tool_registry=_reg, jobs=getattr(args, "jobs", 1) or 1
+            scenarios, agent, run_id=args.run_id, seed=attempt_seed, num_rollouts=args.rollouts, tool_registry=_reg, jobs=getattr(args, "jobs", 1) or 1, weights=weights
         )
         bad = [r for r in report.results if r.scores.hard_violations]
         kill = report.summary.get("mean_kill_rate", 0.0)
@@ -151,12 +167,13 @@ def cmd_baseline(args) -> int:
     scenarios, registry = load_scenario_suite(args.suite)
     behaviors = load_behavior_config(args.behavior)
     out = args.out or "baseline.json"
+    weights = _parse_weights(getattr(args, "weights", None))
     if args.verify_kill_rate is not None:
         agent = _build_agent(registry, behaviors, args.behavior is not None)
         return _capture_verified(scenarios, agent, args, out)
     report = _run_report(
         scenarios, registry, behaviors, args.behavior, args.mutation, args.seed, args.run_id,
-        args.rollouts, getattr(args, "jobs", 1) or 1,
+        args.rollouts, getattr(args, "jobs", 1) or 1, weights,
     )
     save_json(report.model_dump(mode="json"), out)
     print(f"baseline written to {out}")
@@ -170,6 +187,7 @@ def cmd_gate(args) -> int:
     per_scenario = args.behavior is not None
     agent = _build_agent(registry, behaviors, per_scenario)
     baseline = SuiteReport.model_validate(load_json(args.reference))
+    weights = _parse_weights(getattr(args, "weights", None))
     # Optional judge gating (P1: wire judge to CLI, P2: sample cache)
     judge_scores = None
     if getattr(args, "judge_min_score", None) is not None:
@@ -183,7 +201,7 @@ def cmd_gate(args) -> int:
             temperature=getattr(args, "judge_temperature", 0.0) or 0.0,
         )
         # Need a pre-run to score traces before gating
-        tmp_report = run_suite(scenarios, agent, num_rollouts=args.rollouts, tool_registry=registry, jobs=getattr(args, "jobs", 1) or 1)
+        tmp_report = run_suite(scenarios, agent, num_rollouts=args.rollouts, tool_registry=registry, jobs=getattr(args, "jobs", 1) or 1, weights=weights)
         tmp_report = apply_judge(tmp_report, scenarios, judge, samples=getattr(args, "judge_samples", 3) or 3)
         judge_scores = {j.scenario_id: j for j in tmp_report.judges}
         print(f"judge: provider={getattr(args, 'judge_provider', 'ollama')} min_score={args.judge_min_score} samples={getattr(args, 'judge_samples', 3)}")
@@ -200,6 +218,7 @@ def cmd_gate(args) -> int:
         judge_scores=judge_scores,
         judge_min_score=getattr(args, "judge_min_score", None),
         jobs=getattr(args, "jobs", 1) or 1,
+        weights=weights,
     )
 
     print(f"{'scenario':<{MAX_COLS}}{'verdict':<10}  reason")
@@ -213,12 +232,92 @@ def cmd_gate(args) -> int:
     return 0 if failures == 0 else 1
 
 
+def cmd_diff(args) -> int:
+    """Diff two SuiteReports (baseline vs current) — trajectory LCS + kill-rate."""
+    import json
+
+    old = SuiteReport.model_validate(load_json(args.baseline))
+    new = SuiteReport.model_validate(load_json(args.current))
+    old_map = {r.scenario_id: r for r in old.results}
+    new_map = {r.scenario_id: r for r in new.results}
+
+    print(f"diff: {args.baseline} (baseline) vs {args.current} (current)")
+    print(f"{'scenario':<{MAX_COLS}} {'old':>8} {'new':>8} {'delta':>8}  verdict")
+    all_ids = sorted(set(old_map) | set(new_map))
+    for sid in all_ids:
+        o = old_map.get(sid)
+        n = new_map.get(sid)
+        if o is None:
+            print(f"{sid:<{MAX_COLS}} {'-':>8} {_fmt(n.scores.overall) if n else '-':>8} {' new':>8}  NEW")
+            continue
+        if n is None:
+            print(f"{sid:<{MAX_COLS}} {_fmt(o.scores.overall):>8} {'-':>8} {' del':>8}  DELETED")
+            continue
+        delta = n.scores.overall - o.scores.overall
+        new_hard = [v for v in n.scores.hard_violations if v not in o.scores.hard_violations]
+        if new_hard:
+            verdict = f"REGRESSION (+{','.join(new_hard)})"
+        elif delta < -1e-9:
+            verdict = f"REGRESSION d{delta:+.4f}"
+        elif delta > 1e-9:
+            verdict = f"IMPROVED d{delta:+.4f}"
+        else:
+            verdict = "PASS"
+        print(f"{sid:<{MAX_COLS}} {_fmt(o.scores.overall):>8} {_fmt(n.scores.overall):>8} {_fmt(delta):>8}  {verdict}")
+        # Per-component deltas if verbose
+        if getattr(args, "verbose", False):
+            for comp in ("sequence", "required_coverage", "forbidden", "termination", "length", "arg_accuracy", "dangerous_without_confirm"):
+                ov = getattr(o.scores, comp, None)
+                nv = getattr(n.scores, comp, None)
+                if ov is not None and nv is not None and abs(nv - ov) > 1e-9:
+                    print(f"  {comp}: {ov:.4f} -> {nv:.4f} ({nv-ov:+.4f})")
+            # Trajectory LCS diff
+            old_names = o.trace.tool_names() if o.trace else []
+            new_names = n.trace.tool_names() if n.trace else []
+            if old_names != new_names:
+                print(f"  trace: {old_names} -> {new_names}")
+        if getattr(args, "verbose", False) and (o.scores.hard_violations or n.scores.hard_violations):
+            print(f"  hard: {o.scores.hard_violations} -> {n.scores.hard_violations}")
+
+    # Kill-rate diff
+    if old.mutation or new.mutation:
+        print("\nkill-rate:")
+        old_kill = {m.scenario_id: m for m in old.mutation}
+        new_kill = {m.scenario_id: m for m in new.mutation}
+        for sid in all_ids:
+            om = old_kill.get(sid)
+            nm = new_kill.get(sid)
+            if om and nm:
+                dk = nm.kill_rate - om.kill_rate
+                print(f"  {sid:<{MAX_COLS}} {om.kill_rate:.2f} -> {nm.kill_rate:.2f} ({dk:+.2f})")
+            elif nm:
+                print(f"  {sid:<{MAX_COLS}} - -> {nm.kill_rate:.2f}")
+
+    if getattr(args, "json", False):
+        # Also dump machine-readable diff
+        diff = {
+            "baseline": args.baseline,
+            "current": args.current,
+            "scenarios": [
+                {
+                    "id": sid,
+                    "baseline_overall": old_map[sid].scores.overall if sid in old_map else None,
+                    "current_overall": new_map[sid].scores.overall if sid in new_map else None,
+                }
+                for sid in all_ids
+            ],
+        }
+        print("\n" + json.dumps(diff, indent=2))
+    return 0
+
+
 def cmd_mutate(args) -> int:
     scenarios, registry = load_scenario_suite(args.suite)
     behaviors = load_behavior_config(args.behavior)
+    weights = _parse_weights(getattr(args, "weights", None))
     report = _run_report(
         scenarios, registry, behaviors, args.behavior, True, args.seed, args.run_id,
-        args.rollouts, getattr(args, "jobs", 1) or 1,
+        args.rollouts, getattr(args, "jobs", 1) or 1, weights,
     )
     _print_mutations(report)
     if args.out:
@@ -268,7 +367,17 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--judge-samples", type=int, default=3, help="N-shot samples for judge (gate)")
         p.add_argument("--judge-temperature", type=float, default=0.0, help="judge temperature (gate)")
         p.add_argument("--jobs", type=int, default=1, help="parallel jobs for scenario execution (P3, default 1)")
+        # Weights override (P3)
+        p.add_argument("--weights", default=None, help="JSON string for metric weights override, e.g. '{\"forbidden\":5}' (run/baseline/gate)")
         p.set_defaults(fn=fn)
+
+    # Diff command (P3: trajectory diff)
+    p = sub.add_parser("diff", help="diff two reports (baseline vs current) — LCS + kill-rate")
+    p.add_argument("baseline", help="baseline report JSON")
+    p.add_argument("current", help="current report JSON")
+    p.add_argument("-v", "--verbose", action="store_true", help="show per-component deltas and trace LCS")
+    p.add_argument("--json", action="store_true", help="also emit machine-readable JSON")
+    p.set_defaults(fn=cmd_diff)
 
     return parser
 

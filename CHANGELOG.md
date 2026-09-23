@@ -10,13 +10,15 @@ Quick reference for what was done and when.
 
 | Commit | Description |
 |--------|-------------|
-| `pending` | **P3 scale** — parallel jobs, latency stub, public API, CLI version |
+| `pending` | **P3 polish** — diff, weights, parallel, latency stub, public API, pyproject |
 
-**P3 — Scale, Safety & DX (partial):**
+**P3 — Scale, Safety & DX (partial, now 5/8 done):**
+- Diff `cli.py:230` `tracegate diff baseline.json current.json` (`-v` per-component delta + LCS trace + kill-rate, `--json` machine-readable) — verified `diff_base vs diff_buggy` shows `sequence -0.33`, `trace [...] -> [...]`, `hard [] -> [...]`, `delta` ASCII (no Δ)
+- Weights `cli.py:258` `--weights JSON` (`_parse_weights`) for `run`/`baseline`/`gate`/`mutate` → `score_trace`/`run_suite` weights override (tested `'{"forbidden":5}'`)
 - Parallel `suite.py:74` `_run_one_scenario` + `ThreadPoolExecutor(jobs)` in `run_suite(..., jobs=1)` ordered, `cli.py:258` `--jobs`, `run_gate`/`run_suite_with_mutations` pass-through; `jobs=2` verified order preserved
 - Schema `schema.py:30` `ToolSpec.input_schema` + `schema.py:68` `ToolCall.duration_ms/tool_call_id` (stub for latency/cost plugins), `agents/langgraph.py:44` sets `tool_call_id`
 - Public API `__init__.py:16` re-exports `SuiteReport/GateReport/run_suite/run_gate`
-- CLI `cli.py:236` `--version` (via `importlib.metadata`), `--jobs` already
+- CLI `cli.py:236` `--version` (via `importlib.metadata`), `--jobs`/`--weights`/`diff` added; `pyproject.toml:14` `keywords`/`classifiers`/`project.urls`
 
 ### 2026-09-08 (P2)
 

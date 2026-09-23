@@ -27,6 +27,7 @@ class ToolSpec(BaseModel):
     name: str
     description: str = ""
     dangerous: bool = Field(default=False, description="Requires confirmation / high blast radius")
+    input_schema: dict[str, Any] | None = Field(default=None, description="JSON Schema for tool arguments (optional, for validation)")
 
 
 class ToolRegistry(BaseModel):
@@ -65,6 +66,8 @@ class ToolCall(BaseModel):
     name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
     result: Any = None
+    duration_ms: float | None = Field(default=None, ge=0, description="Execution time in milliseconds (optional, for latency metrics)")
+    tool_call_id: str | None = Field(default=None, description="Correlation ID matching the LLM's tool_call_id")
 
 
 class Trajectory(BaseModel):

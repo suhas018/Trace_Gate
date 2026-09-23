@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import concurrent.futures
+
 from pydantic import BaseModel, Field
 
 from tracegate.agent import AgentAdapter
@@ -71,6 +73,24 @@ def _error_result(scenario: Scenario, exc: Exception, weights: dict[str, float] 
     return RunResult(scenario_id=scenario.id, trace=trace, scores=scores)
 
 
+def _run_one_scenario(
+    scenario: Scenario,
+    agent: AgentAdapter,
+    weights: dict[str, float] | None,
+    num_rollouts: int,
+    tool_registry,
+) -> tuple[str, list[RunResult], list[ComponentScores]]:
+    """Helper for parallel execution: runs one scenario's rollouts."""
+    runs: list[RunResult] = []
+    for _ in range(max(1, num_rollouts)):
+        try:
+            runs.append(run_scenario(scenario, agent, weights=weights, tool_registry=tool_registry))
+        except Exception as exc:  # noqa: BLE001 — isolate per-scenario
+            runs.append(_error_result(scenario, exc, weights=weights, tool_registry=tool_registry))
+    scores = [r.scores for r in runs]
+    return scenario.id, runs, scores
+
+
 def run_suite(
     scenarios: list[Scenario],
     agent: AgentAdapter,
@@ -78,6 +98,7 @@ def run_suite(
     run_id: str = "",
     num_rollouts: int = 1,
     tool_registry=None,
+    jobs: int = 1,
 ) -> SuiteReport:
     """Run every scenario through the agent and score each trajectory.
 
@@ -89,18 +110,34 @@ def run_suite(
     Agent exceptions are isolated per-scenario (P0 hardening): a crash on one
     scenario produces a synthetic failing RunResult instead of aborting the
     whole suite.
+
+    ``jobs`` controls parallelism (P3): ``1`` = sequential (default),
+    ``>1`` = ``ThreadPoolExecutor`` with that many workers. Scenarios are
+    independent, so wall-clock scales ~1/jobs for I/O-bound agents.
     """
     results: list[RunResult] = []
     rollouts: dict[str, list[ComponentScores]] = {}
-    for scenario in scenarios:
-        runs: list[RunResult] = []
-        for _ in range(max(1, num_rollouts)):
-            try:
-                runs.append(run_scenario(scenario, agent, weights=weights, tool_registry=tool_registry))
-            except Exception as exc:  # noqa: BLE001 — isolate per-scenario
-                runs.append(_error_result(scenario, exc, weights=weights, tool_registry=tool_registry))
-        rollouts[scenario.id] = [r.scores for r in runs]
-        results.append(_worst(runs))
+    if jobs and jobs > 1 and len(scenarios) > 1:
+        # Parallel path: submit each scenario independently
+        with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+            future_to_id = {
+                pool.submit(_run_one_scenario, sc, agent, weights, num_rollouts, tool_registry): sc.id
+                for sc in scenarios
+            }
+            # Collect in scenario order to keep report deterministic
+            tmp: dict[str, tuple[list[RunResult], list[ComponentScores]]] = {}
+            for fut in concurrent.futures.as_completed(future_to_id):
+                sid, runs, scores = fut.result()
+                tmp[sid] = (runs, scores)
+            for sc in scenarios:
+                runs, scores = tmp[sc.id]
+                rollouts[sc.id] = scores
+                results.append(_worst(runs))
+    else:
+        for scenario in scenarios:
+            _, runs, scores = _run_one_scenario(scenario, agent, weights, num_rollouts, tool_registry)
+            rollouts[scenario.id] = scores
+            results.append(_worst(runs))
     overalls = [r.scores.overall for r in results]
     mean_overall = sum(overalls) / len(overalls) if overalls else 0.0
     rollout_means = [
@@ -127,9 +164,10 @@ def run_suite_with_mutations(
     seed: int = 42,
     num_rollouts: int = 1,
     tool_registry=None,
+    jobs: int = 1,
 ) -> SuiteReport:
     """Run the suite and, for each scenario, mutation-test the golden trace."""
-    report = run_suite(scenarios, agent, weights=weights, run_id=run_id, num_rollouts=num_rollouts, tool_registry=tool_registry)
+    report = run_suite(scenarios, agent, weights=weights, run_id=run_id, num_rollouts=num_rollouts, tool_registry=tool_registry, jobs=jobs)
     mutations: list[MutationSuiteResult] = []
     for result in report.results:
         mutations.append(
@@ -226,6 +264,7 @@ def run_gate(
     judge_scores: dict[str, SampledJudgeResult] | None = None,
     judge_min_score: float | None = None,
     tool_registry=None,
+    jobs: int = 1,
 ) -> GateReport:
     """Compare a fresh suite run against a stored baseline and produce verdicts.
 
@@ -239,7 +278,7 @@ def run_gate(
     downgraded to REGRESSION — this is how the goal-refusal blind spot gets
     closed. Fail-closed: an UNAVAILABLE judge with gating enabled fails.
     """
-    current = run_suite(scenarios, agent, weights=weights, num_rollouts=num_rollouts, tool_registry=tool_registry)
+    current = run_suite(scenarios, agent, weights=weights, num_rollouts=num_rollouts, tool_registry=tool_registry, jobs=jobs)
     per_scenario: list[GateResult] = []
     for scenario in scenarios:
         base = baseline.scores_for(scenario.id)

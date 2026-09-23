@@ -14,6 +14,7 @@ from tracegate.metrics import (
     score_trace,
 )
 from tracegate.runner import run_scenario
+from tracegate.suite import GateReport, SuiteReport, run_gate, run_suite, run_suite_with_mutations
 
 __all__ = [
     "ExpectedToolCall",
@@ -28,6 +29,11 @@ __all__ = [
     "registry",
     "score_trace",
     "run_scenario",
+    "SuiteReport",
+    "GateReport",
+    "run_suite",
+    "run_suite_with_mutations",
+    "run_gate",
 ]
 
 try:

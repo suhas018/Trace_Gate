@@ -92,6 +92,7 @@ class LangGraphAdapter:
                         name=str(name),
                         arguments=dict(args),
                         result=raw_result,
+                        tool_call_id=str(tid) if tid else None,
                     )
                 )
         # The *last* model/assistant message determines whether the loop

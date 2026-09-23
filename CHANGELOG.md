@@ -6,11 +6,23 @@ Quick reference for what was done and when.
 
 ## September 2026
 
+### 2026-09-08 (P3)
+
+| Commit | Description |
+|--------|-------------|
+| `pending` | **P3 scale** — parallel jobs, latency stub, public API, CLI version |
+
+**P3 — Scale, Safety & DX (partial):**
+- Parallel `suite.py:74` `_run_one_scenario` + `ThreadPoolExecutor(jobs)` in `run_suite(..., jobs=1)` ordered, `cli.py:258` `--jobs`, `run_gate`/`run_suite_with_mutations` pass-through; `jobs=2` verified order preserved
+- Schema `schema.py:30` `ToolSpec.input_schema` + `schema.py:68` `ToolCall.duration_ms/tool_call_id` (stub for latency/cost plugins), `agents/langgraph.py:44` sets `tool_call_id`
+- Public API `__init__.py:16` re-exports `SuiteReport/GateReport/run_suite/run_gate`
+- CLI `cli.py:236` `--version` (via `importlib.metadata`), `--jobs` already
+
 ### 2026-09-08 (P2)
 
 | Commit | Description |
 |--------|-------------|
-| `pending` | **P2 judge** — caching, per-call grounding, calibration, hardening |
+| `c6ac5f4` | **P2 judge** — caching, per-call grounding, calibration, hardening |
 
 **P2 — Judge Reliability & Cost (5/5 done):**
 - **Caching** (`judge.py:17`): `JUDGE_PROMPT_VERSION=1.1`, `_SAMPLE_CACHE/_SINGLE_CACHE` LRU 128, `sample_judge(..., use_cache=True)` keyed `id+trace_hash+model+prompt_version+n+prompt_hash`, `_trace_hash` sha256, `CachedJudge` hits/misses, `clear_judge_cache()` — 2nd `sample_judge` same trace = 0 calls (3→3 not 6)
